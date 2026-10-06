@@ -1,5 +1,13 @@
 import nodemailer from 'nodemailer'
 
+export interface CompanyInfo {
+  name?: string
+  contact?: string
+  phone?: string
+  email?: string
+  website?: string
+}
+
 export interface ArrivalEmailData {
   toEmail: string
   destinationName: string
@@ -8,6 +16,9 @@ export interface ArrivalEmailData {
   arrivalTime?: string | Date
   cteNumber?: string | null
   driverName?: string
+  serviceType?: string
+  sender?: string
+  companyInfo?: CompanyInfo
   notes?: string
   extraCc?: string[]
 }
@@ -21,6 +32,9 @@ export interface CompletionEmailData {
   departureTime?: string | Date
   cteNumber?: string | null
   driverName?: string
+  serviceType?: string
+  sender?: string
+  companyInfo?: CompanyInfo
   checkinPhotoUrl?: string | null
   notes?: string
   extraCc?: string[]
@@ -85,6 +99,10 @@ export function generateArrivalEmailHtml(data: ArrivalEmailData): string {
     ? data.invoices.filter(Boolean).join(', ')
     : data.invoices || 'S/ NF'
   const destination = data.destinationName || 'Destino'
+  const cte = data.cteNumber || 'S/ DACTE'
+  const service = data.serviceType || 'Estadia'
+  const sender = data.sender || 'Não inf.'
+  const comp = data.companyInfo
   const obs = data.notes || (data.cteNumber ? `Obs: DACTE / CT-e: ${data.cteNumber}` : 'Obs: Motorista posicionado no local.')
 
   return `
@@ -103,7 +121,7 @@ export function generateArrivalEmailHtml(data: ArrivalEmailData): string {
       line-height: 1.5;
     }
     .container {
-      max-width: 650px;
+      max-width: 720px;
       margin: 0 auto;
     }
     .greeting {
@@ -126,11 +144,11 @@ export function generateArrivalEmailHtml(data: ArrivalEmailData): string {
       margin-top: 16px;
       margin-bottom: 32px;
       border: 1px solid #000000;
-      font-size: 14px;
+      font-size: 13px;
     }
     table.arrival-table th {
       border: 1px solid #000000;
-      padding: 10px 14px;
+      padding: 10px 10px;
       background-color: #f8fafc;
       font-weight: bold;
       text-align: center;
@@ -138,7 +156,7 @@ export function generateArrivalEmailHtml(data: ArrivalEmailData): string {
     }
     table.arrival-table td {
       border: 1px solid #000000;
-      padding: 10px 14px;
+      padding: 10px 10px;
       text-align: center;
       color: #1e293b;
     }
@@ -150,9 +168,9 @@ export function generateArrivalEmailHtml(data: ArrivalEmailData): string {
       color: #334155;
     }
     .sig-name {
-      font-size: 18px;
+      font-size: 17px;
       font-weight: bold;
-      color: #dc2626;
+      color: #0f172a;
       margin-bottom: 2px;
     }
     .sig-role {
@@ -162,11 +180,11 @@ export function generateArrivalEmailHtml(data: ArrivalEmailData): string {
     }
     .sig-brand {
       display: inline-block;
-      font-size: 24px;
+      font-size: 20px;
       font-weight: 900;
-      color: #dc2626;
+      color: #0d9488;
       letter-spacing: -0.5px;
-      margin: 10px 0;
+      margin: 8px 0;
     }
     .sig-contact {
       font-size: 13px;
@@ -175,7 +193,7 @@ export function generateArrivalEmailHtml(data: ArrivalEmailData): string {
     }
     .sig-email {
       font-weight: bold;
-      color: #dc2626;
+      color: #0d9488;
       text-decoration: none;
     }
   </style>
@@ -191,6 +209,9 @@ export function generateArrivalEmailHtml(data: ArrivalEmailData): string {
     <table class="arrival-table">
       <thead>
         <tr>
+          <th>DACTE</th>
+          <th>SERVIÇO</th>
+          <th>REMETENTE</th>
           <th>NF</th>
           <th>DESTINO</th>
           <th>STATUS</th>
@@ -199,6 +220,9 @@ export function generateArrivalEmailHtml(data: ArrivalEmailData): string {
       </thead>
       <tbody>
         <tr>
+          <td><strong>${cte}</strong></td>
+          <td>${service}</td>
+          <td>${sender}</td>
           <td><strong>${invoicesStr}</strong></td>
           <td>${destination}</td>
           <td>Aguardando</td>
@@ -208,16 +232,17 @@ export function generateArrivalEmailHtml(data: ArrivalEmailData): string {
     </table>
 
     <div class="signature">
-      <div class="sig-name">Atendimento AuditCargo</div>
+      <div class="sig-name">${comp?.contact || 'Atendimento Operacional'}</div>
       <div class="sig-role">Operações de Transporte & Telemetria Portuária</div>
       
       <div class="sig-brand">
-        <span style="border: 2px solid #0d9488; border-radius: 50%; padding: 2px 7px; margin-right: 4px; font-size: 16px; color: #0d9488;">A</span><span style="color: #0f172a;">uditCargo</span>
+        ${comp?.name || 'AuditCargo'}
       </div>
 
       <div class="sig-contact">
-        <div>E-mail: <span class="sig-email" style="color: #0d9488;">${process.env.SMTP_USER || 'amazingflowsuite@gmail.com'}</span></div>
-        <div>Telefones: <strong>(11) 5023-0008 / (11) 2611-7570</strong></div>
+        <div>E-mail: <a href="mailto:${comp?.email || process.env.SMTP_USER || 'amazingflowsuite@gmail.com'}" class="sig-email">${comp?.email || process.env.SMTP_USER || 'amazingflowsuite@gmail.com'}</a></div>
+        ${comp?.phone ? `<div>Telefones: <strong>${comp.phone}</strong></div>` : `<div>Telefones: <strong>(11) 5023-0008 / (11) 2611-7570</strong></div>`}
+        ${comp?.website ? `<div>Site: <a href="${comp.website.startsWith('http') ? comp.website : `https://${comp.website}`}" target="_blank" style="color: #64748b; text-decoration: underline;">${comp.website}</a></div>` : ''}
       </div>
     </div>
   </div>
@@ -235,6 +260,10 @@ export function generateCompletionEmailHtml(data: CompletionEmailData): string {
     ? data.invoices.filter(Boolean).join(', ')
     : data.invoices || 'S/ NF'
   const destination = data.destinationName || 'Destino'
+  const cte = data.cteNumber || 'S/ DACTE'
+  const service = data.serviceType || 'Estadia'
+  const sender = data.sender || 'Não inf.'
+  const comp = data.companyInfo
 
   return `
 <!DOCTYPE html>
@@ -252,7 +281,7 @@ export function generateCompletionEmailHtml(data: CompletionEmailData): string {
       line-height: 1.5;
     }
     .container {
-      max-width: 650px;
+      max-width: 760px;
       margin: 0 auto;
     }
     .greeting {
@@ -271,11 +300,11 @@ export function generateCompletionEmailHtml(data: CompletionEmailData): string {
       margin-top: 16px;
       margin-bottom: 24px;
       border: 1px solid #000000;
-      font-size: 14px;
+      font-size: 13px;
     }
     table.arrival-table th {
       border: 1px solid #000000;
-      padding: 10px 14px;
+      padding: 10px 10px;
       background-color: #f8fafc;
       font-weight: bold;
       text-align: center;
@@ -283,7 +312,7 @@ export function generateCompletionEmailHtml(data: CompletionEmailData): string {
     }
     table.arrival-table td {
       border: 1px solid #000000;
-      padding: 10px 14px;
+      padding: 10px 10px;
       text-align: center;
       color: #1e293b;
     }
@@ -314,9 +343,9 @@ export function generateCompletionEmailHtml(data: CompletionEmailData): string {
       color: #334155;
     }
     .sig-name {
-      font-size: 18px;
+      font-size: 17px;
       font-weight: bold;
-      color: #dc2626;
+      color: #0f172a;
       margin-bottom: 2px;
     }
     .sig-role {
@@ -326,11 +355,11 @@ export function generateCompletionEmailHtml(data: CompletionEmailData): string {
     }
     .sig-brand {
       display: inline-block;
-      font-size: 24px;
+      font-size: 20px;
       font-weight: 900;
-      color: #dc2626;
+      color: #0d9488;
       letter-spacing: -0.5px;
-      margin: 10px 0;
+      margin: 8px 0;
     }
     .sig-contact {
       font-size: 13px;
@@ -339,7 +368,7 @@ export function generateCompletionEmailHtml(data: CompletionEmailData): string {
     }
     .sig-email {
       font-weight: bold;
-      color: #dc2626;
+      color: #0d9488;
       text-decoration: none;
     }
   </style>
@@ -353,15 +382,21 @@ export function generateCompletionEmailHtml(data: CompletionEmailData): string {
     <table class="arrival-table">
       <thead>
         <tr>
+          <th>DACTE</th>
+          <th>SERVIÇO</th>
+          <th>REMETENTE</th>
           <th>NF</th>
           <th>DESTINO</th>
           <th>STATUS</th>
           <th>CHEGADA</th>
-          <th>SAIDA</th>
+          <th>SAÍDA</th>
         </tr>
       </thead>
       <tbody>
         <tr>
+          <td><strong>${cte}</strong></td>
+          <td>${service}</td>
+          <td>${sender}</td>
           <td><strong>${invoicesStr}</strong></td>
           <td>${destination}</td>
           <td>ENTREGUE ${dateFormatted}</td>
@@ -382,16 +417,17 @@ export function generateCompletionEmailHtml(data: CompletionEmailData): string {
     ` : ''}
 
     <div class="signature">
-      <div class="sig-name">Atendimento AuditCargo</div>
+      <div class="sig-name">${comp?.contact || 'Atendimento Operacional'}</div>
       <div class="sig-role">Operações de Transporte & Telemetria Portuária</div>
       
       <div class="sig-brand">
-        <span style="border: 2px solid #0d9488; border-radius: 50%; padding: 2px 7px; margin-right: 4px; font-size: 16px; color: #0d9488;">A</span><span style="color: #0f172a;">uditCargo</span>
+        ${comp?.name || 'AuditCargo'}
       </div>
 
       <div class="sig-contact">
-        <div>E-mail: <span class="sig-email" style="color: #0d9488;">${process.env.SMTP_USER || 'amazingflowsuite@gmail.com'}</span></div>
-        <div>Telefones: <strong>(11) 5023-0008 / (11) 2611-7570</strong></div>
+        <div>E-mail: <a href="mailto:${comp?.email || process.env.SMTP_USER || 'amazingflowsuite@gmail.com'}" class="sig-email">${comp?.email || process.env.SMTP_USER || 'amazingflowsuite@gmail.com'}</a></div>
+        ${comp?.phone ? `<div>Telefones: <strong>${comp.phone}</strong></div>` : `<div>Telefones: <strong>(11) 5023-0008 / (11) 2611-7570</strong></div>`}
+        ${comp?.website ? `<div>Site: <a href="${comp.website.startsWith('http') ? comp.website : `https://${comp.website}`}" target="_blank" style="color: #64748b; text-decoration: underline;">${comp.website}</a></div>` : ''}
       </div>
     </div>
   </div>

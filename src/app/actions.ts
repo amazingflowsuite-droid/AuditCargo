@@ -24,10 +24,14 @@ export async function createCompany(formData: FormData) {
   const supabase = await createClient()
   const name = formData.get('name') as string
   const cnpj = formData.get('cnpj') as string
+  const contact = formData.get('contact') as string || null
+  const phone = formData.get('phone') as string || null
+  const email = formData.get('email') as string || null
+  const website = formData.get('website') as string || null
 
   const { data, error } = await supabase
     .from('companies')
-    .insert([{ name, cnpj }])
+    .insert([{ name, cnpj, contact, phone, email, website }])
     .select()
     .single()
 
@@ -40,10 +44,14 @@ export async function updateCompany(id: string, formData: FormData) {
   const supabase = await createClient()
   const name = formData.get('name') as string
   const cnpj = formData.get('cnpj') as string
+  const contact = formData.get('contact') as string || null
+  const phone = formData.get('phone') as string || null
+  const email = formData.get('email') as string || null
+  const website = formData.get('website') as string || null
 
   const { data, error } = await supabase
     .from('companies')
-    .update({ name, cnpj })
+    .update({ name, cnpj, contact, phone, email, website })
     .eq('id', id)
     .select()
     .single()
@@ -293,6 +301,70 @@ export async function createTrip(payload: {
   return { success: true, data }
 }
 
+export async function updateTrip(
+  id: string,
+  payload: {
+    cte_number?: string
+    service_type?: string
+    sender?: string
+    destination?: string
+    invoices?: string[]
+    driver_id?: string
+    status?: string
+  }
+) {
+  const supabase = await createClient()
+  const updateData: any = {}
+  if (payload.cte_number !== undefined) updateData.cte_number = payload.cte_number || null
+  if (payload.service_type !== undefined) updateData.service_type = payload.service_type
+  if (payload.sender !== undefined) updateData.sender = payload.sender || null
+  if (payload.destination !== undefined) updateData.destination = payload.destination
+  if (payload.invoices !== undefined) updateData.invoices = payload.invoices
+  if (payload.driver_id !== undefined) updateData.driver_id = payload.driver_id
+  if (payload.status !== undefined) updateData.status = payload.status
+
+  const { data, error } = await supabase
+    .from('trips')
+    .update(updateData)
+    .eq('id', id)
+    .select(`
+      *,
+      companies(name, contact, phone, email, website),
+      drivers(name, phone, default_plate)
+    `)
+    .single()
+
+  if (error) return { error: error.message }
+  revalidatePath('/')
+  return { success: true, data }
+}
+
+export async function cancelTrip(id: string) {
+  const supabase = await createClient()
+  const { data, error } = await supabase
+    .from('trips')
+    .update({ status: 'cancelled' })
+    .eq('id', id)
+    .select()
+    .single()
+
+  if (error) return { error: error.message }
+  revalidatePath('/')
+  return { success: true, data }
+}
+
+export async function deleteTrip(id: string) {
+  const supabase = await createClient()
+  const { error } = await supabase
+    .from('trips')
+    .delete()
+    .eq('id', id)
+
+  if (error) return { error: error.message }
+  revalidatePath('/')
+  return { success: true }
+}
+
 // --- TELEMETRIA DO MOTORISTA ---
 export async function registerCheckin(
   tripId: string,
@@ -354,7 +426,8 @@ export async function registerCheckin(
     .eq('id', tripId)
     .select(`
       *,
-      drivers(name, phone)
+      drivers(name, phone),
+      companies(name, contact, phone, email, website)
     `)
     .single()
 
@@ -436,6 +509,9 @@ export async function registerCheckin(
           arrivalTime: arrivalTime,
           cteNumber: trip.cte_number,
           driverName: trip.drivers?.name,
+          serviceType: trip.service_type,
+          sender: trip.sender,
+          companyInfo: trip.companies,
           extraCc,
         })
 
@@ -471,7 +547,8 @@ export async function registerCheckout(tripId: string) {
     .eq('id', tripId)
     .select(`
       *,
-      drivers(name, phone)
+      drivers(name, phone),
+      companies(name, contact, phone, email, website)
     `)
     .single()
 
@@ -545,6 +622,9 @@ export async function registerCheckout(tripId: string) {
           departureTime: completionTime,
           cteNumber: trip.cte_number,
           driverName: trip.drivers?.name,
+          serviceType: trip.service_type,
+          sender: trip.sender,
+          companyInfo: trip.companies,
           checkinPhotoUrl: trip.checkin_photo_url,
           extraCc,
         })

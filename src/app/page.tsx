@@ -1,10 +1,9 @@
 import Link from "next/link"
-import { getTrips } from "./actions"
+import { getTrips, getDrivers } from "./actions"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import {
   PlusCircle,
-  Truck,
   Clock,
   CheckCircle2,
   AlertCircle,
@@ -12,7 +11,7 @@ import {
 import { TripsDashboardTable } from "@/components/TripsDashboardTable"
 
 export default async function Home() {
-  const trips = await getTrips()
+  const [trips, drivers] = await Promise.all([getTrips(), getDrivers()])
 
   const inTransitTrips = trips.filter(
     (t: any) => t.status === "in_transit" || t.status === "pending"
@@ -96,7 +95,7 @@ export default async function Home() {
         </Card>
       </div>
 
-      {/* Tabela de Transportes com Filtros e Busca */}
+      {/* Tabela de Transportes com Filtros, Edição, Cancelamento e Busca */}
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold tracking-wider text-[#78716C] uppercase font-mono">
@@ -104,7 +103,7 @@ export default async function Home() {
           </h2>
         </div>
 
-        <TripsDashboardTable trips={trips} />
+        <TripsDashboardTable trips={trips} drivers={drivers} />
       </div>
     </div>
   )

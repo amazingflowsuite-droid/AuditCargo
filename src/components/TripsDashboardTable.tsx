@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useTransition } from 'react'
 import Link from 'next/link'
 import {
   Truck,
@@ -11,8 +11,19 @@ import {
   FileText,
   Camera,
   Search,
-  Filter,
+  Pencil,
+  Ban,
+  Trash2,
+  X,
+  Check,
+  Building2,
+  MapPin,
+  User,
 } from 'lucide-react'
+import { updateTrip, cancelTrip, deleteTrip } from '@/app/actions'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 
 // Ícone oficial WhatsApp vetorial
 export function WhatsAppIcon({ className = "w-4 h-4" }: { className?: string }) {
@@ -30,28 +41,48 @@ export function WhatsAppIcon({ className = "w-4 h-4" }: { className?: string }) 
 
 interface TripsDashboardTableProps {
   trips: any[]
+  drivers?: any[]
 }
 
-type FilterTab = 'open' | 'finished' | 'all'
+type FilterTab = 'open' | 'finished' | 'cancelled' | 'all'
 
-export function TripsDashboardTable({ trips }: TripsDashboardTableProps) {
-  // Padrão: Iniciar mostrando apenas os transportes em aberto
+export function TripsDashboardTable({ trips: initialTrips, drivers = [] }: TripsDashboardTableProps) {
+  const [trips, setTrips] = useState(initialTrips)
   const [activeTab, setActiveTab] = useState<FilterTab>('open')
   const [searchTerm, setSearchTerm] = useState('')
+  const [isPending, startTransition] = useTransition()
+
+  // Estado para Edição
+  const [editingTrip, setEditingTrip] = useState<any | null>(null)
+  const [editCte, setEditCte] = useState('')
+  const [editServiceType, setEditServiceType] = useState('Estadia')
+  const [editSender, setEditSender] = useState('')
+  const [editDestination, setEditDestination] = useState('')
+  const [editInvoices, setEditInvoices] = useState('')
+  const [editDriverId, setEditDriverId] = useState('')
+  const [editStatus, setEditStatus] = useState('in_transit')
+
+  // Estado para Cancelamento / Exclusão
+  const [actionTrip, setActionTrip] = useState<any | null>(null)
 
   const openTripsCount = useMemo(() => {
-    return trips.filter((t) => t.status !== 'finished').length
+    return trips.filter((t) => t.status !== 'finished' && t.status !== 'cancelled').length
   }, [trips])
 
   const finishedTripsCount = useMemo(() => {
     return trips.filter((t) => t.status === 'finished').length
   }, [trips])
 
+  const cancelledTripsCount = useMemo(() => {
+    return trips.filter((t) => t.status === 'cancelled').length
+  }, [trips])
+
   const filteredTrips = useMemo(() => {
     return trips.filter((trip) => {
       // Filtro de Status
-      if (activeTab === 'open' && trip.status === 'finished') return false
+      if (activeTab === 'open' && (trip.status === 'finished' || trip.status === 'cancelled')) return false
       if (activeTab === 'finished' && trip.status !== 'finished') return false
+      if (activeTab === 'cancelled' && trip.status !== 'cancelled') return false
 
       // Filtro de Busca
       if (searchTerm.trim()) {
@@ -107,6 +138,11 @@ export function TripsDashboardTable({ trips }: TripsDashboardTableProps) {
           label: 'Concluído',
           color: 'bg-[#ECFDF5] text-[#047857] border-[#A7F3D0]',
         }
+      case 'cancelled':
+        return {
+          label: 'Cancelado',
+          color: 'bg-red-50 text-red-700 border-red-200',
+        }
       default:
         return {
           label: status,
@@ -115,16 +151,80 @@ export function TripsDashboardTable({ trips }: TripsDashboardTableProps) {
     }
   }
 
+  const openEditModal = (trip: any) => {
+    setEditingTrip(trip)
+    setEditCte(trip.cte_number || '')
+    setEditServiceType(trip.service_type || 'Estadia')
+    setEditSender(trip.sender || '')
+    setEditDestination(trip.destination || '')
+    setEditInvoices(Array.isArray(trip.invoices) ? trip.invoices.join(', ') : '')
+    setEditDriverId(trip.driver_id || '')
+    setEditStatus(trip.status || 'in_transit')
+  }
+
+  const handleSaveEdit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editingTrip) return
+
+    const parsedInvoices = editInvoices
+      .split(',')
+      .map((i) => i.trim())
+      .filter(Boolean)
+
+    startTransition(async () => {
+      const res = await updateTrip(editingTrip.id, {
+        cte_number: editCte,
+        service_type: editServiceType,
+        sender: editSender,
+        destination: editDestination,
+        invoices: parsedInvoices,
+        driver_id: editDriverId || undefined,
+        status: editStatus,
+      })
+
+      if (res.success && res.data) {
+        setTrips((prev) => prev.map((t) => (t.id === editingTrip.id ? res.data : t)))
+        setEditingTrip(null)
+      } else {
+        alert('Erro ao atualizar transporte: ' + (res.error || 'Erro desconhecido'))
+      }
+    })
+  }
+
+  const handleCancelStatus = (tripId: string) => {
+    startTransition(async () => {
+      const res = await cancelTrip(tripId)
+      if (res.success && res.data) {
+        setTrips((prev) => prev.map((t) => (t.id === tripId ? { ...t, status: 'cancelled' } : t)))
+        setActionTrip(null)
+      } else {
+        alert('Erro ao cancelar: ' + (res.error || 'Erro desconhecido'))
+      }
+    })
+  }
+
+  const handleDeletePermanent = (tripId: string) => {
+    startTransition(async () => {
+      const res = await deleteTrip(tripId)
+      if (res.success) {
+        setTrips((prev) => prev.filter((t) => t.id !== tripId))
+        setActionTrip(null)
+      } else {
+        alert('Erro ao excluir: ' + (res.error || 'Erro desconhecido'))
+      }
+    })
+  }
+
   return (
     <div className="space-y-4">
       {/* Controles de Filtro e Busca */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
-        {/* Abas de Filtro: Em Aberto (Default), Concluídos, Todos */}
-        <div className="inline-flex items-center p-1 bg-[#F5F5F4] rounded-[8px] border border-[#E7E5E4] text-xs font-medium">
+        {/* Abas de Filtro: Em Aberto (Default), Concluídos, Cancelados, Todos */}
+        <div className="inline-flex items-center p-1 bg-[#F5F5F4] rounded-[8px] border border-[#E7E5E4] text-xs font-medium overflow-x-auto">
           <button
             type="button"
             onClick={() => setActiveTab('open')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-[6px] transition-all font-mono ${
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-[6px] transition-all font-mono whitespace-nowrap ${
               activeTab === 'open'
                 ? 'bg-white text-[#0D9488] font-bold shadow-sm border border-[#E7E5E4]'
                 : 'text-[#78716C] hover:text-[#1C1917]'
@@ -145,7 +245,7 @@ export function TripsDashboardTable({ trips }: TripsDashboardTableProps) {
           <button
             type="button"
             onClick={() => setActiveTab('finished')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-[6px] transition-all font-mono ${
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-[6px] transition-all font-mono whitespace-nowrap ${
               activeTab === 'finished'
                 ? 'bg-white text-[#059669] font-bold shadow-sm border border-[#E7E5E4]'
                 : 'text-[#78716C] hover:text-[#1C1917]'
@@ -165,8 +265,29 @@ export function TripsDashboardTable({ trips }: TripsDashboardTableProps) {
 
           <button
             type="button"
+            onClick={() => setActiveTab('cancelled')}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-[6px] transition-all font-mono whitespace-nowrap ${
+              activeTab === 'cancelled'
+                ? 'bg-white text-red-600 font-bold shadow-sm border border-[#E7E5E4]'
+                : 'text-[#78716C] hover:text-[#1C1917]'
+            }`}
+          >
+            <span>Cancelados</span>
+            <span
+              className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+                activeTab === 'cancelled'
+                  ? 'bg-red-100 text-red-700'
+                  : 'bg-[#E7E5E4] text-[#57534E]'
+              }`}
+            >
+              {cancelledTripsCount}
+            </span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => setActiveTab('all')}
-            className={`flex items-center gap-2 px-3.5 py-1.5 rounded-[6px] transition-all font-mono ${
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-[6px] transition-all font-mono whitespace-nowrap ${
               activeTab === 'all'
                 ? 'bg-white text-[#1C1917] font-bold shadow-sm border border-[#E7E5E4]'
                 : 'text-[#78716C] hover:text-[#1C1917]'
@@ -215,6 +336,8 @@ export function TripsDashboardTable({ trips }: TripsDashboardTableProps) {
               ? 'Nenhum transporte em aberto no momento'
               : activeTab === 'finished'
               ? 'Nenhum transporte concluído encontrado'
+              : activeTab === 'cancelled'
+              ? 'Nenhum transporte cancelado'
               : 'Nenhum transporte localizado'}
           </h3>
           <p className="text-xs text-[#78716C] max-w-md mx-auto">
@@ -222,17 +345,6 @@ export function TripsDashboardTable({ trips }: TripsDashboardTableProps) {
               ? 'Todos os transportes foram finalizados ou você pode emitir um novo transporte.'
               : 'Verifique os filtros selecionados ou cadastre novos transportes.'}
           </p>
-          {activeTab === 'open' && finishedTripsCount > 0 && (
-            <div className="pt-2">
-              <button
-                type="button"
-                onClick={() => setActiveTab('finished')}
-                className="text-xs text-[#0D9488] font-medium hover:underline"
-              >
-                Visualizar {finishedTripsCount} transportes concluídos →
-              </button>
-            </div>
-          )}
         </div>
       ) : (
         <div className="border border-[#E7E5E4] rounded-[8px] bg-white overflow-hidden shadow-sm">
@@ -246,7 +358,7 @@ export function TripsDashboardTable({ trips }: TripsDashboardTableProps) {
                   <th className="px-4 py-3.5">Motorista / Placa</th>
                   <th className="px-4 py-3.5">Chegada & Finalização</th>
                   <th className="px-4 py-3.5">Status</th>
-                  <th className="px-4 py-3.5 text-right">Ação</th>
+                  <th className="px-4 py-3.5 text-right">Ações</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E7E5E4]">
@@ -349,8 +461,10 @@ export function TripsDashboardTable({ trips }: TripsDashboardTableProps) {
                         </span>
                       </td>
 
+                      {/* COLUNA: AÇÕES (WHATSAPP, LINK, EDITAR, CANCELAR) */}
                       <td className="px-4 py-4 text-right">
-                        <div className="flex items-center justify-end gap-2">
+                        <div className="flex items-center justify-end gap-1.5">
+                          {/* Botão WhatsApp */}
                           {whatsappUrl && (
                             <a
                               href={whatsappUrl}
@@ -362,13 +476,36 @@ export function TripsDashboardTable({ trips }: TripsDashboardTableProps) {
                               <WhatsAppIcon className="w-4 h-4" />
                             </a>
                           )}
+
+                          {/* Link Motorista */}
                           <Link
                             href={`/v/${trip.token}`}
                             target="_blank"
-                            className="inline-flex items-center gap-1 text-xs text-[#0D9488] font-semibold hover:underline"
+                            className="p-2 text-[#57534E] hover:text-[#0D9488] hover:bg-[#F5F5F4] rounded-[6px] transition-colors"
+                            title="Abrir tela móvel do motorista"
                           >
-                            Ver tela móvel <ArrowUpRight className="w-3.5 h-3.5" />
+                            <ArrowUpRight className="w-4 h-4" />
                           </Link>
+
+                          {/* Botão Editar Transporte */}
+                          <button
+                            type="button"
+                            onClick={() => openEditModal(trip)}
+                            className="p-2 text-[#57534E] hover:text-[#0D9488] hover:bg-[#F5F5F4] rounded-[6px] transition-colors"
+                            title="Editar Dados do Transporte"
+                          >
+                            <Pencil className="w-4 h-4" />
+                          </button>
+
+                          {/* Botão Cancelar / Excluir */}
+                          <button
+                            type="button"
+                            onClick={() => setActionTrip(trip)}
+                            className="p-2 text-[#57534E] hover:text-red-600 hover:bg-red-50 rounded-[6px] transition-colors"
+                            title="Cancelar ou Excluir Transporte"
+                          >
+                            <Ban className="w-4 h-4" />
+                          </button>
                         </div>
                       </td>
                     </tr>
@@ -376,6 +513,201 @@ export function TripsDashboardTable({ trips }: TripsDashboardTableProps) {
                 })}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE EDIÇÃO DE TRANSPORTE */}
+      {editingTrip && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white rounded-[10px] border border-[#E7E5E4] shadow-2xl max-w-lg w-full overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-3.5 bg-[#F5F5F4] border-b border-[#E7E5E4]">
+              <div className="flex items-center gap-2">
+                <Pencil className="w-4 h-4 text-[#0D9488]" />
+                <h3 className="font-bold text-sm text-[#1C1917]">
+                  Editar Transporte #{editingTrip.token}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingTrip(null)}
+                className="text-[#78716C] hover:text-[#1C1917]"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEdit} className="p-5 space-y-3.5 max-h-[80vh] overflow-y-auto">
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label htmlFor="editCte">CT-e / DACTE</Label>
+                  <Input
+                    id="editCte"
+                    value={editCte}
+                    onChange={(e) => setEditCte(e.target.value)}
+                    placeholder="Ex: 204"
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <Label htmlFor="editServiceType">Tipo de Serviço</Label>
+                  <select
+                    id="editServiceType"
+                    value={editServiceType}
+                    onChange={(e) => setEditServiceType(e.target.value)}
+                    className="flex h-9 w-full rounded-[6px] border border-[#D6D3D1] bg-[#FAFAF9] px-2.5 text-xs text-[#1C1917]"
+                  >
+                    <option value="Estadia">Estadia</option>
+                    <option value="Descarga">Descarga</option>
+                    <option value="Devolução">Devolução</option>
+                    <option value="Transferência">Transferência</option>
+                    <option value="Coleta">Coleta</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                <Label htmlFor="editStatus">Status da Operação</Label>
+                <select
+                  id="editStatus"
+                  value={editStatus}
+                  onChange={(e) => setEditStatus(e.target.value)}
+                  className="flex h-9 w-full rounded-[6px] border border-[#D6D3D1] bg-[#FAFAF9] px-2.5 text-xs text-[#1C1917] font-medium"
+                >
+                  <option value="in_transit">Em Trânsito (A caminho)</option>
+                  <option value="arrived">Na Portaria (Chegada registrada)</option>
+                  <option value="unloading">Em Descarga (Operação)</option>
+                  <option value="finished">Concluído (Finalizado)</option>
+                  <option value="cancelled">Cancelado</option>
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <Label htmlFor="editSender">Remetente</Label>
+                <Input
+                  id="editSender"
+                  value={editSender}
+                  onChange={(e) => setEditSender(e.target.value)}
+                  placeholder="Nome do Remetente / Município"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <Label htmlFor="editDestination">Destinatário / Destino *</Label>
+                <Input
+                  id="editDestination"
+                  value={editDestination}
+                  onChange={(e) => setEditDestination(e.target.value)}
+                  placeholder="Nome do Destinatário - Município"
+                  required
+                />
+              </div>
+
+              <div className="space-y-1">
+                <Label htmlFor="editInvoices">Notas Fiscais (separadas por vírgula)</Label>
+                <Input
+                  id="editInvoices"
+                  value={editInvoices}
+                  onChange={(e) => setEditInvoices(e.target.value)}
+                  placeholder="Ex: NF-1020, NF-1021"
+                />
+              </div>
+
+              {drivers.length > 0 && (
+                <div className="space-y-1">
+                  <Label htmlFor="editDriverId">Motorista Designado</Label>
+                  <select
+                    id="editDriverId"
+                    value={editDriverId}
+                    onChange={(e) => setEditDriverId(e.target.value)}
+                    className="flex h-9 w-full rounded-[6px] border border-[#D6D3D1] bg-[#FAFAF9] px-2.5 text-xs text-[#1C1917]"
+                  >
+                    <option value="">Selecione o motorista...</option>
+                    {drivers.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name} {d.default_plate ? `(${d.default_plate})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-[#E7E5E4]">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setEditingTrip(null)}
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  type="submit"
+                  size="sm"
+                  className="bg-[#0D9488] hover:bg-[#0F766E]"
+                  disabled={isPending}
+                >
+                  {isPending ? 'Salvando...' : 'Salvar Alterações'}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL DE CONFIRMAÇÃO DE CANCELAMENTO OU EXCLUSÃO */}
+      {actionTrip && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white rounded-[10px] border border-[#E7E5E4] shadow-2xl max-w-md w-full p-5 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-red-100 text-red-600 flex items-center justify-center shrink-0">
+                <Ban className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="font-bold text-base text-[#1C1917]">
+                  Cancelar ou Excluir Transporte?
+                </h3>
+                <p className="text-xs text-[#78716C] font-mono">
+                  Token: <strong>{actionTrip.token}</strong> | Destino: {actionTrip.destination}
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-[#57534E] leading-relaxed">
+              Você pode <strong>Cancelar</strong> a operação (mantendo os registros históricos para auditoria com status &quot;Cancelado&quot;) ou <strong>Excluir Definitivamente</strong> o registro do banco de dados.
+            </p>
+
+            <div className="space-y-2 pt-1">
+              <button
+                type="button"
+                onClick={() => handleCancelStatus(actionTrip.id)}
+                disabled={isPending}
+                className="w-full flex items-center justify-center gap-2 h-10 rounded-[6px] border border-amber-300 bg-amber-50 hover:bg-amber-100 text-amber-900 text-xs font-semibold transition-all"
+              >
+                <Ban className="w-3.5 h-3.5" />
+                Marcar como Cancelado (Recomendado)
+              </button>
+
+              <button
+                type="button"
+                onClick={() => handleDeletePermanent(actionTrip.id)}
+                disabled={isPending}
+                className="w-full flex items-center justify-center gap-2 h-10 rounded-[6px] border border-red-300 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold transition-all"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Excluir Definitivamente do Sistema
+              </button>
+            </div>
+
+            <div className="pt-2 text-center">
+              <button
+                type="button"
+                onClick={() => setActionTrip(null)}
+                className="text-xs text-[#78716C] hover:text-[#1C1917] underline"
+              >
+                Voltar sem alterar
+              </button>
+            </div>
           </div>
         </div>
       )}
