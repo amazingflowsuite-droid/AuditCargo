@@ -32,10 +32,13 @@ import {
 export function SenderManager({
   initialSenders,
   companies,
+  userRole = 'admin',
 }: {
   initialSenders: any[]
   companies: any[]
+  userRole?: 'admin' | 'operator'
 }) {
+  const isAdmin = userRole === 'admin'
   const [senders, setSenders] = useState(initialSenders)
   const [isPending, startTransition] = useTransition()
 
@@ -221,12 +224,8 @@ export function SenderManager({
           <CardDescription>Cadastre o expedidor de mercadorias (indústria, fábrica ou armazém).</CardDescription>
         </CardHeader>
         <CardContent>
-          {companies.length === 0 ? (
-            <div className="p-4 bg-amber-50 border border-amber-200 rounded-[6px] text-xs text-amber-900">
-              Cadastre pelo menos uma <strong>Empresa</strong> antes de adicionar remetentes.
-            </div>
-          ) : (
-            <form onSubmit={handleCreateSender} className="space-y-3.5">
+          <form onSubmit={handleCreateSender} className="space-y-3.5">
+            {companies.length > 1 && (
               <div className="space-y-1">
                 <Label htmlFor="company_id">Empresa Responsável</Label>
                 <select
@@ -243,6 +242,7 @@ export function SenderManager({
                   ))}
                 </select>
               </div>
+            )}
 
               <div className="space-y-1">
                 <Label htmlFor="name">Nome do Remetente (Razão Social)</Label>
@@ -324,7 +324,6 @@ export function SenderManager({
                 {isPending ? 'Salvando...' : 'Salvar Remetente'}
               </Button>
             </form>
-          )}
         </CardContent>
       </Card>
 
@@ -354,9 +353,11 @@ export function SenderManager({
                 <Card key={s.id} className="relative hover:border-[#0D9488]/40 transition-colors">
                   <CardHeader className="pb-3">
                     <div className="flex items-start justify-between">
-                      <span className="text-[11px] font-mono font-semibold px-2 py-0.5 rounded-[4px] bg-[#F5F5F4] text-[#0F172A] border border-[#E7E5E4]">
-                        {s.companies?.name || "Empresa"}
-                      </span>
+                      {companies.length > 1 && (
+                        <span className="text-[11px] font-mono font-semibold px-2 py-0.5 rounded-[4px] bg-[#F5F5F4] text-[#0F172A] border border-[#E7E5E4]">
+                          {s.companies?.name || "Empresa"}
+                        </span>
+                      )}
 
                       <div className="flex items-center gap-1">
                         <button
@@ -367,14 +368,16 @@ export function SenderManager({
                         >
                           <Pencil className="w-3.5 h-3.5" />
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => setDeletingId(s.id)}
-                          className="p-1.5 text-[#57534E] hover:text-[#DC2626] hover:bg-red-50 rounded-[4px] transition-colors"
-                          title="Excluir Remetente"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        {isAdmin && (
+                          <button
+                            type="button"
+                            onClick={() => setDeletingId(s.id)}
+                            className="p-1.5 text-[#57534E] hover:text-[#DC2626] hover:bg-red-50 rounded-[4px] transition-colors"
+                            title="Excluir Remetente"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                     </div>
 
@@ -631,14 +634,16 @@ export function SenderManager({
                                       </div>
                                     </div>
 
-                                    <button
-                                      type="button"
-                                      onClick={() => handleDeleteSubRecipient(s.id, sub.id)}
-                                      className="p-1 text-gray-400 hover:text-red-600 transition-colors"
-                                      title="Excluir Destinatário"
-                                    >
-                                      <Trash2 className="w-3.5 h-3.5" />
-                                    </button>
+                                    {isAdmin && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleDeleteSubRecipient(s.id, sub.id)}
+                                        className="p-1 text-gray-400 hover:text-red-600 transition-colors"
+                                        title="Excluir Destinatário"
+                                      >
+                                        <Trash2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    )}
                                   </div>
                                 ))}
                               </div>

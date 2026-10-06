@@ -21,7 +21,7 @@ export default async function DriverTripPage({
     .select(`
       *,
       companies(name),
-      branches(name, city),
+      branches(name, city, email),
       drivers(name, default_plate, phone)
     `)
     .eq("token", token.toUpperCase())
@@ -99,7 +99,7 @@ export default async function DriverTripPage({
         </CardHeader>
         <CardContent className="p-4 pt-1 text-xs text-[#57534E] flex items-center justify-between font-mono">
           <span>Placa: <strong>{trip.drivers?.default_plate || "N/A"}</strong></span>
-          <span>{trip.companies?.name}</span>
+          <span>{trip.branches?.name ? `${trip.branches.name} (${trip.companies?.name || ''})` : trip.companies?.name}</span>
         </CardContent>
       </Card>
 

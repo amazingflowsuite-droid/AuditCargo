@@ -24,7 +24,14 @@ import {
   Info,
 } from "lucide-react"
 
-export function EmailManager({ initialEmails }: { initialEmails: any[] }) {
+export function EmailManager({
+  initialEmails,
+  userRole = 'admin',
+}: {
+  initialEmails: any[]
+  userRole?: 'admin' | 'operator'
+}) {
+  const isAdmin = userRole === 'admin'
   const [emails, setEmails] = useState(initialEmails)
   const [isPending, startTransition] = useTransition()
   const [feedbackError, setFeedbackError] = useState<string | null>(null)
@@ -339,15 +346,17 @@ export function EmailManager({ initialEmails }: { initialEmails: any[] }) {
                           >
                             <Pencil className="w-3.5 h-3.5" />
                           </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 w-7 p-0 text-[#78716C] hover:text-red-600"
-                            title="Excluir e-mail"
-                            onClick={() => setDeletingId(item.id)}
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </Button>
+                          {isAdmin && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 w-7 p-0 text-[#78716C] hover:text-red-600"
+                              title="Excluir e-mail"
+                              onClick={() => setDeletingId(item.id)}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </Button>
+                          )}
                         </div>
                       </div>
 

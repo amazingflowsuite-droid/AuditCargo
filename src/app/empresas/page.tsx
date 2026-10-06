@@ -1,8 +1,12 @@
 import { getCompanies } from "../actions"
+import { requireAuth } from "@/utils/supabase/auth"
 import { CompanyManager } from "./CompanyManager"
 
 export default async function EmpresasPage() {
-  const companies = await getCompanies()
+  const [currentUser, companies] = await Promise.all([
+    requireAuth(),
+    getCompanies(),
+  ])
 
   return (
     <div className="space-y-8">
@@ -17,7 +21,7 @@ export default async function EmpresasPage() {
         </div>
       </div>
 
-      <CompanyManager initialCompanies={companies} />
+      <CompanyManager initialCompanies={companies} userRole={currentUser.role} />
     </div>
   )
 }

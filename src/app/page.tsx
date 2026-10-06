@@ -1,5 +1,6 @@
 import Link from "next/link"
 import { getTrips, getDrivers } from "./actions"
+import { requireAuth } from "@/utils/supabase/auth"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import {
@@ -11,7 +12,11 @@ import {
 import { TripsDashboardTable } from "@/components/TripsDashboardTable"
 
 export default async function Home() {
-  const [trips, drivers] = await Promise.all([getTrips(), getDrivers()])
+  const [currentUser, trips, drivers] = await Promise.all([
+    requireAuth(),
+    getTrips(),
+    getDrivers()
+  ])
 
   const inTransitTrips = trips.filter(
     (t: any) => t.status === "in_transit" || t.status === "pending"
@@ -103,7 +108,7 @@ export default async function Home() {
           </h2>
         </div>
 
-        <TripsDashboardTable trips={trips} drivers={drivers} />
+        <TripsDashboardTable trips={trips} drivers={drivers} userRole={currentUser.role} />
       </div>
     </div>
   )

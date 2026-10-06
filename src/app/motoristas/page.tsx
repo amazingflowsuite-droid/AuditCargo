@@ -1,8 +1,13 @@
 import { getDrivers, getCompanies } from "../actions"
+import { requireAuth } from "@/utils/supabase/auth"
 import { DriverManager } from "./DriverManager"
 
 export default async function MotoristasPage() {
-  const [drivers, companies] = await Promise.all([getDrivers(), getCompanies()])
+  const [currentUser, drivers, companies] = await Promise.all([
+    requireAuth(),
+    getDrivers(),
+    getCompanies(),
+  ])
 
   return (
     <div className="space-y-8">
@@ -17,7 +22,7 @@ export default async function MotoristasPage() {
         </div>
       </div>
 
-      <DriverManager initialDrivers={drivers} companies={companies} />
+      <DriverManager initialDrivers={drivers} companies={companies} userRole={currentUser.role} />
     </div>
   )
 }

@@ -1,8 +1,13 @@
 import { getBranches, getCompanies } from "../actions"
+import { requireAuth } from "@/utils/supabase/auth"
 import { BranchManager } from "./BranchManager"
 
 export default async function FiliaisPage() {
-  const [branches, companies] = await Promise.all([getBranches(), getCompanies()])
+  const [currentUser, branches, companies] = await Promise.all([
+    requireAuth(),
+    getBranches(),
+    getCompanies(),
+  ])
 
   return (
     <div className="space-y-8">
@@ -17,7 +22,7 @@ export default async function FiliaisPage() {
         </div>
       </div>
 
-      <BranchManager initialBranches={branches} companies={companies} />
+      <BranchManager initialBranches={branches} companies={companies} userRole={currentUser.role} />
     </div>
   )
 }

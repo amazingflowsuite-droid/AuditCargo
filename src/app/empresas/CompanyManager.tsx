@@ -21,7 +21,14 @@ import {
   User,
 } from "lucide-react"
 
-export function CompanyManager({ initialCompanies }: { initialCompanies: any[] }) {
+export function CompanyManager({
+  initialCompanies,
+  userRole = 'admin',
+}: {
+  initialCompanies: any[]
+  userRole?: 'admin' | 'operator'
+}) {
+  const isAdmin = userRole === 'admin'
   const [companies, setCompanies] = useState(initialCompanies)
   const [isPending, startTransition] = useTransition()
 
@@ -242,14 +249,16 @@ export function CompanyManager({ initialCompanies }: { initialCompanies: any[] }
                         >
                           <Pencil className="w-3.5 h-3.5" />
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => setDeletingId(company.id)}
-                          className="p-1.5 text-[#57534E] hover:text-[#DC2626] hover:bg-red-50 rounded-[4px] transition-colors"
-                          title="Excluir Empresa"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        {isAdmin && (
+                          <button
+                            type="button"
+                            onClick={() => setDeletingId(company.id)}
+                            className="p-1.5 text-[#57534E] hover:text-[#DC2626] hover:bg-red-50 rounded-[4px] transition-colors"
+                            title="Excluir Empresa"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                     </div>
 

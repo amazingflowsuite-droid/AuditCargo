@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition } from 'react'
+import { useState, useTransition, useEffect } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -18,6 +18,7 @@ export function NewTripForm({
   drivers: any[]
 }) {
   const [selectedCompanyId, setSelectedCompanyId] = useState<string>(companies[0]?.id || '')
+  const [selectedBranchId, setSelectedBranchId] = useState<string>(branches[0]?.id || '')
   const [selectedDriverId, setSelectedDriverId] = useState<string>(drivers[0]?.id || '')
   const [isPending, startTransition] = useTransition()
   const [result, setResult] = useState<any | null>(null)
@@ -27,6 +28,16 @@ export function NewTripForm({
   const filteredBranches = branches.filter((b) => !selectedCompanyId || b.company_id === selectedCompanyId)
   const filteredDrivers = drivers.filter((d) => !selectedCompanyId || d.company_id === selectedCompanyId)
   const currentDriver = drivers.find((d) => d.id === selectedDriverId)
+
+  // Auto-seleciona a primeira filial disponível
+  useEffect(() => {
+    if (filteredBranches.length > 0) {
+      const exists = filteredBranches.some((b) => b.id === selectedBranchId)
+      if (!exists) {
+        setSelectedBranchId(filteredBranches[0].id)
+      }
+    }
+  }, [selectedCompanyId, filteredBranches, selectedBranchId])
 
   async function handleSubmit(formData: FormData) {
     setResult(null)
@@ -136,12 +147,11 @@ export function NewTripForm({
       </CardHeader>
 
       <CardContent>
-        {companies.length === 0 || drivers.length === 0 ? (
+        {drivers.length === 0 ? (
           <div className="p-4 bg-amber-50 border border-amber-200 rounded-[6px] text-xs text-amber-900 space-y-2">
             <p className="font-semibold">Cadastros prévios necessários:</p>
             <p>
-              Antes de gerar viagens, certifique-se de que possui pelo menos uma <strong>Empresa</strong> e um{" "}
-              <strong>Motorista</strong> cadastrados.
+              Antes de gerar viagens, certifique-se de que possui pelo menos um <strong>Motorista</strong> cadastrado.
             </p>
           </div>
         ) : (
@@ -153,26 +163,28 @@ export function NewTripForm({
             )}
 
             {/* Empresa e Filial */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label htmlFor="company_id" className="flex items-center gap-1.5">
-                  <Building2 className="w-3.5 h-3.5 text-[#0D9488]" /> Empresa
-                </Label>
-                <select
-                  id="company_id"
-                  name="company_id"
-                  value={selectedCompanyId}
-                  onChange={(e) => setSelectedCompanyId(e.target.value)}
-                  required
-                  className="flex h-11 w-full rounded-[6px] border border-[#D6D3D1] bg-[#FAFAF9] px-3.5 py-2.5 text-sm text-[#1C1917] focus-ring"
-                >
-                  {companies.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
+            <div className={`grid grid-cols-1 ${companies.length > 1 ? 'sm:grid-cols-2' : ''} gap-4`}>
+              {companies.length > 1 && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="company_id" className="flex items-center gap-1.5">
+                    <Building2 className="w-3.5 h-3.5 text-[#0D9488]" /> Empresa
+                  </Label>
+                  <select
+                    id="company_id"
+                    name="company_id"
+                    value={selectedCompanyId}
+                    onChange={(e) => setSelectedCompanyId(e.target.value)}
+                    required
+                    className="flex h-11 w-full rounded-[6px] border border-[#D6D3D1] bg-[#FAFAF9] px-3.5 py-2.5 text-sm text-[#1C1917] focus-ring"
+                  >
+                    {companies.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
 
               <div className="space-y-1.5">
                 <Label htmlFor="branch_id" className="flex items-center gap-1.5">
@@ -181,14 +193,19 @@ export function NewTripForm({
                 <select
                   id="branch_id"
                   name="branch_id"
+                  value={selectedBranchId}
+                  onChange={(e) => setSelectedBranchId(e.target.value)}
                   className="flex h-11 w-full rounded-[6px] border border-[#D6D3D1] bg-[#FAFAF9] px-3.5 py-2.5 text-sm text-[#1C1917] focus-ring"
                 >
-                  <option value="">Selecione uma filial (opcional)</option>
-                  {filteredBranches.map((b) => (
-                    <option key={b.id} value={b.id}>
-                      {b.name} ({b.city || 'S/ Cidade'})
-                    </option>
-                  ))}
+                  {filteredBranches.length === 0 ? (
+                    <option value="">Sem filiais cadastradas</option>
+                  ) : (
+                    filteredBranches.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name} ({b.city || 'S/ Cidade'})
+                      </option>
+                    ))
+                  )}
                 </select>
               </div>
             </div>

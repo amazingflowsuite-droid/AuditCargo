@@ -13,11 +13,14 @@ export function RecipientManager({
   initialRecipients,
   companies,
   senders = [],
+  userRole = 'admin',
 }: {
   initialRecipients: any[]
   companies: any[]
   senders?: any[]
+  userRole?: 'admin' | 'operator'
 }) {
+  const isAdmin = userRole === 'admin'
   const [recipients, setRecipients] = useState(initialRecipients)
   const [isPending, startTransition] = useTransition()
   const [filterSenderId, setFilterSenderId] = useState<string>('all')
@@ -150,12 +153,8 @@ export function RecipientManager({
           <CardDescription>Cadastre clientes e vincule ao Remetente expedidor.</CardDescription>
         </CardHeader>
         <CardContent>
-          {companies.length === 0 ? (
-            <div className="p-4 bg-amber-50 border border-amber-200 rounded-[6px] text-xs text-amber-900">
-              Cadastre pelo menos uma <strong>Empresa</strong> antes de adicionar destinatários.
-            </div>
-          ) : (
-            <form onSubmit={handleCreate} className="space-y-3.5">
+          <form onSubmit={handleCreate} className="space-y-3.5">
+            {companies.length > 1 && (
               <div className="space-y-1">
                 <Label htmlFor="company_id">Empresa Responsável</Label>
                 <select
@@ -172,6 +171,7 @@ export function RecipientManager({
                   ))}
                 </select>
               </div>
+            )}
 
               {/* Vínculo de 1 Remetente -> N Destinatários */}
               <div className="space-y-1">
@@ -286,7 +286,6 @@ export function RecipientManager({
                 {isPending ? 'Salvando...' : 'Salvar Destinatário'}
               </Button>
             </form>
-          )}
         </CardContent>
       </Card>
 
@@ -335,9 +334,11 @@ export function RecipientManager({
                   <CardHeader className="pb-3">
                     <div className="flex items-start justify-between">
                       <div className="flex flex-col gap-1">
-                        <span className="text-[11px] font-mono font-semibold px-2 py-0.5 rounded-[4px] bg-[#F5F5F4] text-[#0F172A] border border-[#E7E5E4] w-fit">
-                          {r.companies?.name || "Empresa"}
-                        </span>
+                        {companies.length > 1 && (
+                          <span className="text-[11px] font-mono font-semibold px-2 py-0.5 rounded-[4px] bg-[#F5F5F4] text-[#0F172A] border border-[#E7E5E4] w-fit">
+                            {r.companies?.name || "Empresa"}
+                          </span>
+                        )}
                         {r.senders?.name && (
                           <span className="text-[10px] font-mono text-[#0D9488]">
                             De: {r.senders.name}
@@ -354,14 +355,16 @@ export function RecipientManager({
                         >
                           <Pencil className="w-3.5 h-3.5" />
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => setDeletingId(r.id)}
-                          className="p-1.5 text-[#57534E] hover:text-[#DC2626] hover:bg-red-50 rounded-[4px] transition-colors"
-                          title="Excluir Destinatário"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        {isAdmin && (
+                          <button
+                            type="button"
+                            onClick={() => setDeletingId(r.id)}
+                            className="p-1.5 text-[#57534E] hover:text-[#DC2626] hover:bg-red-50 rounded-[4px] transition-colors"
+                            title="Excluir Destinatário"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                     </div>
 

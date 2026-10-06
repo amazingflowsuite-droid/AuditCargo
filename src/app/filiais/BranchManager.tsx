@@ -6,17 +6,21 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { createBranch, updateBranch, deleteBranch } from "../actions"
-import { MapPin, Plus, Pencil, Trash2, Building2, X, Check } from "lucide-react"
+import { MapPin, Plus, Pencil, Trash2, Building2, X, Check, Mail, Phone, User } from "lucide-react"
 
 export function BranchManager({
   initialBranches,
   companies,
+  userRole = 'admin',
 }: {
   initialBranches: any[]
   companies: any[]
+  userRole?: 'admin' | 'operator'
 }) {
+  const isAdmin = userRole === 'admin'
   const [branches, setBranches] = useState(initialBranches)
   const [isPending, startTransition] = useTransition()
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
 
   // Novo cadastro
   const [companyId, setCompanyId] = useState(companies[0]?.id || '')
@@ -24,6 +28,9 @@ export function BranchManager({
   const [code, setCode] = useState('')
   const [city, setCity] = useState('')
   const [state, setState] = useState('')
+  const [email, setEmail] = useState('')
+  const [phone, setPhone] = useState('')
+  const [contact, setContact] = useState('')
 
   // Edição
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -32,28 +39,42 @@ export function BranchManager({
   const [editCode, setEditCode] = useState('')
   const [editCity, setEditCity] = useState('')
   const [editState, setEditState] = useState('')
+  const [editEmail, setEditEmail] = useState('')
+  const [editPhone, setEditPhone] = useState('')
+  const [editContact, setEditContact] = useState('')
 
   // Deleção
   const [deletingId, setDeletingId] = useState<string | null>(null)
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault()
+    setErrorMessage(null)
     const formData = new FormData()
     formData.append('company_id', companyId)
     formData.append('name', name)
     formData.append('code', code)
     formData.append('city', city)
     formData.append('state', state)
+    formData.append('email', email)
+    formData.append('phone', phone)
+    formData.append('contact', contact)
 
     startTransition(async () => {
       const res = await createBranch(formData)
+      if (res.error) {
+        setErrorMessage(res.error)
+        return
+      }
       if (res.success && res.data) {
-        const companyObj = companies.find((c) => c.id === companyId)
+        const companyObj = companies.find((c) => c.id === companyId) || res.data.companies
         setBranches([{ ...res.data, companies: companyObj }, ...branches])
         setName('')
         setCode('')
         setCity('')
         setState('')
+        setEmail('')
+        setPhone('')
+        setContact('')
       }
     })
   }
@@ -65,6 +86,9 @@ export function BranchManager({
     setEditCode(b.code || '')
     setEditCity(b.city || '')
     setEditState(b.state || '')
+    setEditEmail(b.email || '')
+    setEditPhone(b.phone || '')
+    setEditContact(b.contact || '')
   }
 
   const cancelEdit = () => {
@@ -78,6 +102,9 @@ export function BranchManager({
     formData.append('code', editCode)
     formData.append('city', editCity)
     formData.append('state', editState)
+    formData.append('email', editEmail)
+    formData.append('phone', editPhone)
+    formData.append('contact', editContact)
 
     startTransition(async () => {
       const res = await updateBranch(id, formData)
@@ -111,12 +138,13 @@ export function BranchManager({
           <CardDescription>Cadastre uma unidade de saída ou filial operacional.</CardDescription>
         </CardHeader>
         <CardContent>
-          {companies.length === 0 ? (
-            <div className="p-4 bg-amber-50 border border-amber-200 rounded-[6px] text-xs text-amber-900">
-              Você precisa cadastrar pelo menos uma <strong>Empresa</strong> antes de adicionar filiais.
+          {errorMessage && (
+            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-[6px] text-xs text-red-700">
+              {errorMessage}
             </div>
-          ) : (
-            <form onSubmit={handleCreate} className="space-y-4">
+          )}
+          <form onSubmit={handleCreate} className="space-y-4">
+            {companies.length > 1 && (
               <div className="space-y-1.5">
                 <Label htmlFor="company_id">Empresa Responsável</Label>
                 <select
@@ -133,6 +161,7 @@ export function BranchManager({
                   ))}
                 </select>
               </div>
+            )}
 
               <div className="space-y-1.5">
                 <Label htmlFor="name">Nome da Filial / CD</Label>
@@ -177,11 +206,45 @@ export function BranchManager({
                 </div>
               </div>
 
+              <div className="space-y-1.5">
+                <Label htmlFor="email">E-mail Operacional da Filial</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  placeholder="Ex: filial.gru@empresa.com.br"
+                />
+                <p className="text-[11px] text-[#78716C]">
+                  E-mail utilizado como remetente operacional e cópia nos comunicados de chegada e saída das cargas desta filial.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1.5">
+                  <Label htmlFor="contact">Contato / Responsável</Label>
+                  <Input
+                    id="contact"
+                    value={contact}
+                    onChange={(e) => setContact(e.target.value)}
+                    placeholder="Ex: Operações / Carlos"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="phone">Telefone / WhatsApp</Label>
+                  <Input
+                    id="phone"
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    placeholder="Ex: (11) 98765-4321"
+                  />
+                </div>
+              </div>
+
               <Button type="submit" className="w-full" disabled={isPending}>
                 {isPending ? 'Salvando...' : 'Salvar Filial'}
               </Button>
             </form>
-          )}
         </CardContent>
       </Card>
 
@@ -222,33 +285,37 @@ export function BranchManager({
                         >
                           <Pencil className="w-3.5 h-3.5" />
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => setDeletingId(b.id)}
-                          className="p-1.5 text-[#57534E] hover:text-[#DC2626] hover:bg-red-50 rounded-[4px] transition-colors"
-                          title="Excluir Filial"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        {isAdmin && (
+                          <button
+                            type="button"
+                            onClick={() => setDeletingId(b.id)}
+                            className="p-1.5 text-[#57534E] hover:text-[#DC2626] hover:bg-red-50 rounded-[4px] transition-colors"
+                            title="Excluir Filial"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                     </div>
 
                     {isEditing ? (
                       <div className="space-y-3 pt-2">
-                        <div>
-                          <Label className="text-xs">Empresa</Label>
-                          <select
-                            value={editCompanyId}
-                            onChange={(e) => setEditCompanyId(e.target.value)}
-                            className="flex h-9 w-full rounded-[6px] border border-[#D6D3D1] bg-[#FAFAF9] px-2 text-xs text-[#1C1917] mt-1"
-                          >
-                            {companies.map((c: any) => (
-                              <option key={c.id} value={c.id}>
-                                {c.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
+                        {companies.length > 1 && (
+                          <div>
+                            <Label className="text-xs">Empresa</Label>
+                            <select
+                              value={editCompanyId}
+                              onChange={(e) => setEditCompanyId(e.target.value)}
+                              className="flex h-9 w-full rounded-[6px] border border-[#D6D3D1] bg-[#FAFAF9] px-2 text-xs text-[#1C1917] mt-1"
+                            >
+                              {companies.map((c: any) => (
+                                <option key={c.id} value={c.id}>
+                                  {c.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
                         <div>
                           <Label className="text-xs">Nome da Filial</Label>
                           <Input
@@ -285,6 +352,36 @@ export function BranchManager({
                             className="h-9 text-xs mt-1"
                           />
                         </div>
+                        <div>
+                          <Label className="text-xs">E-mail Operacional</Label>
+                          <Input
+                            type="email"
+                            value={editEmail}
+                            onChange={(e) => setEditEmail(e.target.value)}
+                            className="h-9 text-xs mt-1"
+                            placeholder="filial.gru@empresa.com.br"
+                          />
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <Label className="text-xs">Contato / Responsável</Label>
+                            <Input
+                              value={editContact}
+                              onChange={(e) => setEditContact(e.target.value)}
+                              className="h-9 text-xs mt-1"
+                              placeholder="Operações / Carlos"
+                            />
+                          </div>
+                          <div>
+                            <Label className="text-xs">Telefone / WhatsApp</Label>
+                            <Input
+                              value={editPhone}
+                              onChange={(e) => setEditPhone(e.target.value)}
+                              className="h-9 text-xs mt-1"
+                              placeholder="(11) 98765-4321"
+                            />
+                          </div>
+                        </div>
 
                         <div className="flex items-center gap-2 pt-1">
                           <Button
@@ -307,15 +404,38 @@ export function BranchManager({
                       </div>
                     ) : (
                       <>
-                        <div className="text-xs text-[#57534E] flex items-center gap-1 mt-1">
-                          <Building2 className="w-3.5 h-3.5 text-[#0D9488]" />
-                          {b.companies?.name || "Empresa"}
-                        </div>
+                        {companies.length > 1 && (
+                          <div className="text-xs text-[#57534E] flex items-center gap-1 mt-1">
+                            <Building2 className="w-3.5 h-3.5 text-[#0D9488]" />
+                            {b.companies?.name || "Empresa"}
+                          </div>
+                        )}
                         <CardTitle className="text-base font-bold mt-2">{b.name}</CardTitle>
                         <CardDescription className="text-xs flex items-center gap-1 text-[#78716C]">
                           <MapPin className="w-3.5 h-3.5" />
                           {b.city ? `${b.city}/${b.state || ""}` : "Localização não informada"}
                         </CardDescription>
+
+                        <div className="space-y-1.5 pt-2 border-t border-[#E7E5E4] mt-2.5">
+                          {b.email && (
+                            <div className="text-xs flex items-center gap-1.5 text-[#0D9488] font-mono">
+                              <Mail className="w-3.5 h-3.5 shrink-0" />
+                              <span className="truncate">{b.email}</span>
+                            </div>
+                          )}
+                          {b.phone && (
+                            <div className="text-xs flex items-center gap-1.5 text-[#57534E] font-mono">
+                              <Phone className="w-3.5 h-3.5 shrink-0 text-[#0D9488]" />
+                              <span>{b.phone}</span>
+                            </div>
+                          )}
+                          {b.contact && (
+                            <div className="text-xs flex items-center gap-1.5 text-[#78716C]">
+                              <User className="w-3.5 h-3.5 shrink-0 text-[#0D9488]" />
+                              <span>{b.contact}</span>
+                            </div>
+                          )}
+                        </div>
                       </>
                     )}
                   </CardHeader>

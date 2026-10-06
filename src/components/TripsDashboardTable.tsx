@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo, useTransition } from 'react'
+import { useState, useMemo, useTransition, useEffect } from 'react'
 import Link from 'next/link'
 import {
   Truck,
@@ -42,15 +42,26 @@ export function WhatsAppIcon({ className = "w-4 h-4" }: { className?: string }) 
 interface TripsDashboardTableProps {
   trips: any[]
   drivers?: any[]
+  userRole?: 'admin' | 'operator'
 }
 
 type FilterTab = 'open' | 'finished' | 'cancelled' | 'all'
 
-export function TripsDashboardTable({ trips: initialTrips, drivers = [] }: TripsDashboardTableProps) {
+export function TripsDashboardTable({
+  trips: initialTrips,
+  drivers = [],
+  userRole = 'admin',
+}: TripsDashboardTableProps) {
+  const isAdmin = userRole === 'admin'
   const [trips, setTrips] = useState(initialTrips)
   const [activeTab, setActiveTab] = useState<FilterTab>('open')
   const [searchTerm, setSearchTerm] = useState('')
   const [isPending, startTransition] = useTransition()
+  const [origin, setOrigin] = useState('')
+
+  useEffect(() => {
+    setOrigin(window.location.origin)
+  }, [])
 
   // Estado para Edição
   const [editingTrip, setEditingTrip] = useState<any | null>(null)
@@ -370,7 +381,7 @@ export function TripsDashboardTable({ trips: initialTrips, drivers = [] }: Trips
                         `🚚 *AuditCargo* - CT-e ${trip.cte_number || ''} (${trip.service_type || 'Estadia'})\n` +
                           `Motorista: ${trip.drivers?.name || ''}\n` +
                           `Destino: ${trip.destination}\n\n` +
-                          `📲 *Acesse o link do transporte:*\n${typeof window !== 'undefined' ? window.location.origin : ''}/v/${trip.token}`
+                          `📲 *Acesse o link do transporte:*\n${origin ? `${origin}/v/${trip.token}` : `/v/${trip.token}`}`
                       )}`
                     : null
 
@@ -470,6 +481,7 @@ export function TripsDashboardTable({ trips: initialTrips, drivers = [] }: Trips
                               href={whatsappUrl}
                               target="_blank"
                               rel="noopener noreferrer"
+                              suppressHydrationWarning
                               className="inline-flex items-center justify-center p-2 rounded-[6px] bg-[#25D366]/10 text-[#25D366] hover:bg-[#25D366] hover:text-white transition-all shadow-2xs border border-[#25D366]/30"
                               title="Enviar no WhatsApp"
                             >
@@ -477,17 +489,19 @@ export function TripsDashboardTable({ trips: initialTrips, drivers = [] }: Trips
                             </a>
                           )}
 
-                          {/* Link Motorista */}
-                          <Link
-                            href={`/v/${trip.token}`}
-                            target="_blank"
-                            className="p-2 text-[#57534E] hover:text-[#0D9488] hover:bg-[#F5F5F4] rounded-[6px] transition-colors"
-                            title="Abrir tela móvel do motorista"
-                          >
-                            <ArrowUpRight className="w-4 h-4" />
-                          </Link>
+                          {/* Link Motorista (Apenas Administrador) */}
+                          {isAdmin && (
+                            <Link
+                              href={`/v/${trip.token}`}
+                              target="_blank"
+                              className="p-2 text-[#57534E] hover:text-[#0D9488] hover:bg-[#F5F5F4] rounded-[6px] transition-colors"
+                              title="Abrir tela móvel do motorista"
+                            >
+                              <ArrowUpRight className="w-4 h-4" />
+                            </Link>
+                          )}
 
-                          {/* Botão Editar Transporte */}
+                          {/* Botão Editar Transporte (Admin e Operador) */}
                           <button
                             type="button"
                             onClick={() => openEditModal(trip)}
@@ -497,15 +511,17 @@ export function TripsDashboardTable({ trips: initialTrips, drivers = [] }: Trips
                             <Pencil className="w-4 h-4" />
                           </button>
 
-                          {/* Botão Cancelar / Excluir */}
-                          <button
-                            type="button"
-                            onClick={() => setActionTrip(trip)}
-                            className="p-2 text-[#57534E] hover:text-red-600 hover:bg-red-50 rounded-[6px] transition-colors"
-                            title="Cancelar ou Excluir Transporte"
-                          >
-                            <Ban className="w-4 h-4" />
-                          </button>
+                          {/* Botão Cancelar / Excluir (Apenas Administrador) */}
+                          {isAdmin && (
+                            <button
+                              type="button"
+                              onClick={() => setActionTrip(trip)}
+                              className="p-2 text-[#57534E] hover:text-red-600 hover:bg-red-50 rounded-[6px] transition-colors"
+                              title="Cancelar ou Excluir Transporte"
+                            >
+                              <Ban className="w-4 h-4" />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>

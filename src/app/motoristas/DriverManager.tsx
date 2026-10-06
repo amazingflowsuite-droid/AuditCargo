@@ -11,10 +11,13 @@ import { Truck, Plus, Phone, CreditCard, Building2, Pencil, Trash2, X, Check, Lo
 export function DriverManager({
   initialDrivers,
   companies,
+  userRole = 'admin',
 }: {
   initialDrivers: any[]
   companies: any[]
+  userRole?: 'admin' | 'operator'
 }) {
+  const isAdmin = userRole === 'admin'
   const [drivers, setDrivers] = useState(initialDrivers)
   const [isPending, startTransition] = useTransition()
   const [feedbackError, setFeedbackError] = useState<string | null>(null)
@@ -146,12 +149,8 @@ export function DriverManager({
             <CardDescription>Cadastre motoristas com WhatsApp e PIN para despacho instantâneo.</CardDescription>
           </CardHeader>
           <CardContent>
-            {companies.length === 0 ? (
-              <div className="p-4 bg-amber-50 border border-amber-200 rounded-[6px] text-xs text-amber-900">
-                Você precisa cadastrar pelo menos uma <strong>Empresa</strong> antes de adicionar motoristas.
-              </div>
-            ) : (
-              <form onSubmit={handleCreate} className="space-y-4">
+            <form onSubmit={handleCreate} className="space-y-4">
+              {companies.length > 1 && (
                 <div className="space-y-1.5">
                   <Label htmlFor="company_id">Empresa Vinculada</Label>
                   <select
@@ -168,6 +167,7 @@ export function DriverManager({
                     ))}
                   </select>
                 </div>
+              )}
 
                 <div className="space-y-1.5">
                   <Label htmlFor="name">Nome Completo</Label>
@@ -231,7 +231,6 @@ export function DriverManager({
                   {isPending ? 'Salvando...' : 'Salvar Motorista'}
                 </Button>
               </form>
-            )}
           </CardContent>
         </Card>
 
@@ -276,20 +275,22 @@ export function DriverManager({
                         </div>
                       </CardHeader>
                       <CardContent className="pt-3 space-y-3">
-                        <div className="space-y-1">
-                          <Label className="text-xs">Empresa</Label>
-                          <select
-                            value={editCompanyId}
-                            onChange={(e) => setEditCompanyId(e.target.value)}
-                            className="flex h-9 w-full rounded-[6px] border border-[#D6D3D1] bg-white px-2.5 text-xs text-[#1C1917]"
-                          >
-                            {companies.map((c: any) => (
-                              <option key={c.id} value={c.id}>
-                                {c.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
+                        {companies.length > 1 && (
+                          <div className="space-y-1">
+                            <Label className="text-xs">Empresa</Label>
+                            <select
+                              value={editCompanyId}
+                              onChange={(e) => setEditCompanyId(e.target.value)}
+                              className="flex h-9 w-full rounded-[6px] border border-[#D6D3D1] bg-white px-2.5 text-xs text-[#1C1917]"
+                            >
+                              {companies.map((c: any) => (
+                                <option key={c.id} value={c.id}>
+                                  {c.name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        )}
 
                         <div className="space-y-1">
                           <Label className="text-xs">Nome</Label>
@@ -389,24 +390,28 @@ export function DriverManager({
                           >
                             <Pencil className="w-3.5 h-3.5" />
                           </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 w-7 p-0 text-[#78716C] hover:text-red-600"
-                            title="Excluir motorista"
-                            onClick={() => setDeletingId(d.id)}
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </Button>
+                          {isAdmin && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-7 w-7 p-0 text-[#78716C] hover:text-red-600"
+                              title="Excluir motorista"
+                              onClick={() => setDeletingId(d.id)}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </Button>
+                          )}
                         </div>
                       </div>
 
                       <CardTitle className="text-base font-bold mt-2 text-[#1C1917]">{d.name}</CardTitle>
                       
-                      <div className="text-xs text-[#57534E] flex items-center gap-1 mt-0.5">
-                        <Building2 className="w-3.5 h-3.5 text-[#0D9488] shrink-0" />
-                        <span className="truncate">{d.companies?.name || "Empresa"}</span>
-                      </div>
+                      {companies.length > 1 && (
+                        <div className="text-xs text-[#57534E] flex items-center gap-1 mt-0.5">
+                          <Building2 className="w-3.5 h-3.5 text-[#0D9488] shrink-0" />
+                          <span className="truncate">{d.companies?.name || "Empresa"}</span>
+                        </div>
+                      )}
 
                       <CardDescription className="text-xs flex items-center gap-1.5 text-[#57534E] font-mono mt-1">
                         <Phone className="w-3.5 h-3.5 text-[#0D9488] shrink-0" />

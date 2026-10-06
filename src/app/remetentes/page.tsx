@@ -1,8 +1,13 @@
 import { getSenders, getCompanies } from "../actions"
+import { requireAuth } from "@/utils/supabase/auth"
 import { SenderManager } from "./SenderManager"
 
 export default async function RemetentesPage() {
-  const [senders, companies] = await Promise.all([getSenders(), getCompanies()])
+  const [currentUser, senders, companies] = await Promise.all([
+    requireAuth(),
+    getSenders(),
+    getCompanies(),
+  ])
 
   return (
     <div className="space-y-8">
@@ -17,7 +22,7 @@ export default async function RemetentesPage() {
         </div>
       </div>
 
-      <SenderManager initialSenders={senders} companies={companies} />
+      <SenderManager initialSenders={senders} companies={companies} userRole={currentUser.role} />
     </div>
   )
 }

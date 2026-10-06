@@ -240,8 +240,9 @@ export function generateArrivalEmailHtml(data: ArrivalEmailData): string {
       </div>
 
       <div class="sig-contact">
+        ${comp?.contact ? `<div>Contato: <strong>${comp.contact}</strong></div>` : ''}
         <div>E-mail: <a href="mailto:${comp?.email || process.env.SMTP_USER || 'amazingflowsuite@gmail.com'}" class="sig-email">${comp?.email || process.env.SMTP_USER || 'amazingflowsuite@gmail.com'}</a></div>
-        ${comp?.phone ? `<div>Telefones: <strong>${comp.phone}</strong></div>` : `<div>Telefones: <strong>(11) 5023-0008 / (11) 2611-7570</strong></div>`}
+        ${comp?.phone ? `<div>Telefones: <strong>${comp.phone}</strong></div>` : ''}
         ${comp?.website ? `<div>Site: <a href="${comp.website.startsWith('http') ? comp.website : `https://${comp.website}`}" target="_blank" style="color: #64748b; text-decoration: underline;">${comp.website}</a></div>` : ''}
       </div>
     </div>
@@ -425,8 +426,9 @@ export function generateCompletionEmailHtml(data: CompletionEmailData): string {
       </div>
 
       <div class="sig-contact">
+        ${comp?.contact ? `<div>Contato: <strong>${comp.contact}</strong></div>` : ''}
         <div>E-mail: <a href="mailto:${comp?.email || process.env.SMTP_USER || 'amazingflowsuite@gmail.com'}" class="sig-email">${comp?.email || process.env.SMTP_USER || 'amazingflowsuite@gmail.com'}</a></div>
-        ${comp?.phone ? `<div>Telefones: <strong>${comp.phone}</strong></div>` : `<div>Telefones: <strong>(11) 5023-0008 / (11) 2611-7570</strong></div>`}
+        ${comp?.phone ? `<div>Telefones: <strong>${comp.phone}</strong></div>` : ''}
         ${comp?.website ? `<div>Site: <a href="${comp.website.startsWith('http') ? comp.website : `https://${comp.website}`}" target="_blank" style="color: #64748b; text-decoration: underline;">${comp.website}</a></div>` : ''}
       </div>
     </div>
@@ -519,13 +521,19 @@ export async function sendArrivalEmail(data: ArrivalEmailData): Promise<{
       },
     })
 
-    const info = await transporter.sendMail({
+    const mailOptions: any = {
       from: smtpFrom,
       to: data.toEmail,
       cc: ccEmails,
       subject: subject,
       html: html,
-    })
+    }
+
+    if (data.companyInfo?.email) {
+      mailOptions.replyTo = data.companyInfo.email
+    }
+
+    const info = await transporter.sendMail(mailOptions)
 
     console.log(`📨 E-mail de chegada enviado com sucesso para ${data.toEmail}: ${info.messageId}`)
     return {
@@ -617,6 +625,10 @@ export async function sendCompletionEmail(data: CompletionEmailData): Promise<{
       cc: ccEmails,
       subject: subject,
       html: html,
+    }
+
+    if (data.companyInfo?.email) {
+      mailOptions.replyTo = data.companyInfo.email
     }
 
     // Se houver foto e for uma URL pública válida, podemos anexar
