@@ -3,7 +3,7 @@
 import { createClient } from '@/utils/supabase/server'
 import { revalidatePath } from 'next/cache'
 import { cookies } from 'next/headers'
-import { sendArrivalEmail } from '@/utils/mailer'
+import { sendArrivalEmail, sendCompletionEmail } from '@/utils/mailer'
 
 // --- EMPRESAS ---
 export async function getCompanies() {
@@ -362,7 +362,51 @@ export async function registerCheckin(
     return { error: error.message }
   }
 
-  // --- DISPARO DE E-MAIL AUTOMÃTICO DE CHEGADA AO DESTINATÃRIO ---
+  // Helper para buscar e-mails em cópia ativos
+  const getActiveCcEmails = async () => {
+    try {
+      const { data: ccData } = await supabase
+        .from('notification_emails')
+        .select('email')
+        .eq('active', true)
+      if (ccData && ccData.length > 0) {
+        return ccData.map((c: any) => c.email).filter(Boolean)
+      }
+    } catch {
+      // Falha silenciosa se a tabela ainda não existir
+    }
+    return []
+  }
+
+  // Helper para localizar o e-mail do destinatário
+  const findRecipientEmail = async (tripItem: any) => {
+    if (tripItem.recipient_email && tripItem.recipient_email.includes('@')) {
+      return tripItem.recipient_email
+    }
+    if (Array.isArray(tripItem.recipients)) {
+      const found = tripItem.recipients.find((r: any) => r.email && r.email.includes('@'))
+      if (found) return found.email
+    }
+    const { data: recList } = await supabase
+      .from('recipients')
+      .select('name, city, email')
+      .not('email', 'is', null)
+
+    if (recList && recList.length > 0) {
+      const destLower = (tripItem.destination || '').toLowerCase()
+      const matched = recList.find((r: any) => {
+        if (!r.email) return false
+        const rNameLower = (r.name || '').toLowerCase()
+        return destLower.includes(rNameLower) || rNameLower.includes(destLower)
+      })
+      if (matched?.email) {
+        return matched.email
+      }
+    }
+    return null
+  }
+
+  // --- DISPARO DE E-MAIL AUTOMÁTICO DE CHEGADA AO DESTINATÁRIO & CÓPIAS ---
   let emailSent = false
   let recipientEmailTarget: string | undefined = undefined
   let emailSimulated = false
@@ -370,44 +414,19 @@ export async function registerCheckin(
   try {
     const trip = data
     if (trip) {
-      // 1. Tenta pegar de recipient_email direto na trip
-      let targetEmail = trip.recipient_email || null
-
-      // 2. Tenta pegar do array de destinatÃ¡rios salvo na viagem
-      if (!targetEmail && Array.isArray(trip.recipients)) {
-        const found = trip.recipients.find((r: any) => r.email && r.email.includes('@'))
-        if (found) targetEmail = found.email
-      }
-
-      // 3. Tenta buscar pelo cadastro de destinatÃ¡rios no banco
-      if (!targetEmail) {
-        const { data: recList } = await supabase
-          .from('recipients')
-          .select('name, city, email')
-          .not('email', 'is', null)
-
-        if (recList && recList.length > 0) {
-          const destLower = (trip.destination || '').toLowerCase()
-          const matched = recList.find((r: any) => {
-            if (!r.email) return false
-            const rNameLower = (r.name || '').toLowerCase()
-            return destLower.includes(rNameLower) || rNameLower.includes(destLower)
-          })
-          if (matched?.email) {
-            targetEmail = matched.email
-          }
-        }
-      }
+      const targetEmail = await findRecipientEmail(trip)
 
       if (targetEmail) {
         recipientEmailTarget = targetEmail
-        let destName = trip.destination || 'DestinatÃ¡rio'
+        let destName = trip.destination || 'Destinatário'
         let destCity = ''
         if (destName.includes('-')) {
           const parts = destName.split('-')
           destName = parts[0].trim()
           destCity = parts.slice(1).join('-').trim()
         }
+
+        const extraCc = await getActiveCcEmails()
 
         const mailRes = await sendArrivalEmail({
           toEmail: targetEmail,
@@ -417,6 +436,7 @@ export async function registerCheckin(
           arrivalTime: arrivalTime,
           cteNumber: trip.cte_number,
           driverName: trip.drivers?.name,
+          extraCc,
         })
 
         emailSent = mailRes.success
@@ -440,24 +460,112 @@ export async function registerCheckin(
 
 export async function registerCheckout(tripId: string) {
   const supabase = await createClient()
+  const completionTime = new Date().toISOString()
 
   const { data, error } = await supabase
     .from('trips')
     .update({
       status: 'finished',
-      completion_time: new Date().toISOString(),
+      completion_time: completionTime,
     })
     .eq('id', tripId)
-    .select()
+    .select(`
+      *,
+      drivers(name, phone)
+    `)
     .single()
 
   if (error) {
     return { error: error.message }
   }
 
+  // --- DISPARO DE E-MAIL AUTOMÁTICO DE FINALIZAÇÃO / SAÍDA ---
+  let emailSent = false
+  let recipientEmailTarget: string | undefined = undefined
+  let emailSimulated = false
+
+  try {
+    const trip = data
+    if (trip) {
+      // Localiza o e-mail do destinatário
+      let targetEmail = trip.recipient_email || null
+      if (!targetEmail && Array.isArray(trip.recipients)) {
+        const found = trip.recipients.find((r: any) => r.email && r.email.includes('@'))
+        if (found) targetEmail = found.email
+      }
+      if (!targetEmail) {
+        const { data: recList } = await supabase
+          .from('recipients')
+          .select('name, city, email')
+          .not('email', 'is', null)
+
+        if (recList && recList.length > 0) {
+          const destLower = (trip.destination || '').toLowerCase()
+          const matched = recList.find((r: any) => {
+            if (!r.email) return false
+            const rNameLower = (r.name || '').toLowerCase()
+            return destLower.includes(rNameLower) || rNameLower.includes(destLower)
+          })
+          if (matched?.email) {
+            targetEmail = matched.email
+          }
+        }
+      }
+
+      if (targetEmail) {
+        recipientEmailTarget = targetEmail
+        let destName = trip.destination || 'Destinatário'
+        let destCity = ''
+        if (destName.includes('-')) {
+          const parts = destName.split('-')
+          destName = parts[0].trim()
+          destCity = parts.slice(1).join('-').trim()
+        }
+
+        // Busca e-mails cadastrados para cópia
+        let extraCc: string[] = []
+        try {
+          const { data: ccData } = await supabase
+            .from('notification_emails')
+            .select('email')
+            .eq('active', true)
+          if (ccData && ccData.length > 0) {
+            extraCc = ccData.map((c: any) => c.email).filter(Boolean)
+          }
+        } catch {
+          // Tabela ainda não configurada
+        }
+
+        const mailRes = await sendCompletionEmail({
+          toEmail: targetEmail,
+          destinationName: destName,
+          destinationCity: destCity,
+          invoices: trip.invoices || [],
+          arrivalTime: trip.arrival_time,
+          departureTime: completionTime,
+          cteNumber: trip.cte_number,
+          driverName: trip.drivers?.name,
+          checkinPhotoUrl: trip.checkin_photo_url,
+          extraCc,
+        })
+
+        emailSent = mailRes.success
+        emailSimulated = !!mailRes.simulated
+      }
+    }
+  } catch (mailErr) {
+    console.error('Erro ao processar disparo de e-mail de finalização:', mailErr)
+  }
+
   revalidatePath(`/v/${data.token}`)
   revalidatePath('/')
-  return { success: true, data }
+  return {
+    success: true,
+    data,
+    emailSent,
+    recipientEmail: recipientEmailTarget,
+    simulated: emailSimulated,
+  }
 }
 
 export async function revertCheckin(tripId: string) {
@@ -750,6 +858,99 @@ export async function verifyDriverPin(token: string, pin: string) {
   cookieStore.set(`driver_auth_${token}`, 'true', { maxAge: 60 * 60 * 24 * 7, httpOnly: true })
   
   revalidatePath(`/v/${token}`)
+  return { success: true }
+}
+
+// --- E-MAILS DE NOTIFICAÇÃO (EM CÓPIA / CC) ---
+export async function getNotificationEmails() {
+  const supabase = await createClient()
+  try {
+    const { data, error } = await supabase
+      .from('notification_emails')
+      .select('*')
+      .order('created_at', { ascending: false })
+
+    if (error) {
+      console.warn('Aviso ao buscar notification_emails:', error.message)
+      return []
+    }
+    return data || []
+  } catch {
+    return []
+  }
+}
+
+export async function createNotificationEmail(formData: FormData) {
+  const supabase = await createClient()
+  const name = formData.get('name') as string
+  const email = (formData.get('email') as string)?.trim().toLowerCase()
+  const active = formData.get('active') !== 'false'
+
+  if (!email || !email.includes('@')) {
+    return { error: 'E-mail inválido.' }
+  }
+
+  // Trava de segurança para domínio restrito em testes
+  if (email.includes('@ccargo.com.br')) {
+    return { error: 'Por motivos de segurança em testes, e-mails com domínio @ccargo.com.br não são permitidos no momento.' }
+  }
+
+  const { data, error } = await supabase
+    .from('notification_emails')
+    .insert([{ name, email, active }])
+    .select()
+    .single()
+
+  if (error) return { error: error.message }
+  revalidatePath('/emails')
+  return { success: true, data }
+}
+
+export async function updateNotificationEmail(id: string, formData: FormData) {
+  const supabase = await createClient()
+  const name = formData.get('name') as string
+  const email = (formData.get('email') as string)?.trim().toLowerCase()
+  const active = formData.get('active') === 'true'
+
+  if (email && email.includes('@ccargo.com.br')) {
+    return { error: 'Por motivos de segurança em testes, e-mails com domínio @ccargo.com.br não são permitidos no momento.' }
+  }
+
+  const { data, error } = await supabase
+    .from('notification_emails')
+    .update({ name, email, active })
+    .eq('id', id)
+    .select()
+    .single()
+
+  if (error) return { error: error.message }
+  revalidatePath('/emails')
+  return { success: true, data }
+}
+
+export async function toggleNotificationEmail(id: string, active: boolean) {
+  const supabase = await createClient()
+  const { data, error } = await supabase
+    .from('notification_emails')
+    .update({ active })
+    .eq('id', id)
+    .select()
+    .single()
+
+  if (error) return { error: error.message }
+  revalidatePath('/emails')
+  return { success: true, data }
+}
+
+export async function deleteNotificationEmail(id: string) {
+  const supabase = await createClient()
+  const { error } = await supabase
+    .from('notification_emails')
+    .delete()
+    .eq('id', id)
+
+  if (error) return { error: error.message }
+  revalidatePath('/emails')
   return { success: true }
 }
 

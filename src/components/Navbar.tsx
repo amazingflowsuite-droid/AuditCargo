@@ -2,7 +2,7 @@
 
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { ShieldCheck, Truck, Building2, MapPin, PlusCircle, Compass } from "lucide-react"
+import { ShieldCheck, Truck, Building2, MapPin, PlusCircle, Compass, Mail } from "lucide-react"
 
 export function Navbar() {
   const pathname = usePathname()
@@ -15,6 +15,7 @@ export function Navbar() {
     { href: "/destinatarios", label: "Destinatários", icon: MapPin },
     { href: "/filiais", label: "Filiais", icon: MapPin },
     { href: "/empresas", label: "Empresas", icon: Building2 },
+    { href: "/emails", label: "E-mails Cc", icon: Mail },
   ]
 
   return (

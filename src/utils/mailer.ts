@@ -9,6 +9,21 @@ export interface ArrivalEmailData {
   cteNumber?: string | null
   driverName?: string
   notes?: string
+  extraCc?: string[]
+}
+
+export interface CompletionEmailData {
+  toEmail: string
+  destinationName: string
+  destinationCity?: string
+  invoices: string[] | string
+  arrivalTime?: string | Date
+  departureTime?: string | Date
+  cteNumber?: string | null
+  driverName?: string
+  checkinPhotoUrl?: string | null
+  notes?: string
+  extraCc?: string[]
 }
 
 export function formatTimeForEmail(dateInput?: string | Date): string {
@@ -16,8 +31,16 @@ export function formatTimeForEmail(dateInput?: string | Date): string {
   return date.toLocaleTimeString('pt-BR', {
     hour: '2-digit',
     minute: '2-digit',
-    second: '2-digit',
     hour12: false,
+    timeZone: 'America/Sao_Paulo',
+  })
+}
+
+export function formatDateForEmail(dateInput?: string | Date): string {
+  const date = dateInput ? new Date(dateInput) : new Date()
+  return date.toLocaleDateString('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
     timeZone: 'America/Sao_Paulo',
   })
 }
@@ -40,6 +63,19 @@ export function generateArrivalEmailSubject(
   const nfPart = invStr ? ` - NF ${invStr}` : ''
 
   return `AGUARDANDO - ${destClean}${cityClean}${nfPart}`
+}
+
+export function generateCompletionEmailSubject(
+  destinationName: string,
+  destinationCity: string = '',
+  invoices: string[] | string = ''
+): string {
+  const invStr = Array.isArray(invoices) ? invoices.filter(Boolean).join(', ') : invoices
+  const cityClean = destinationCity ? ` - ${destinationCity.toUpperCase()}` : ''
+  const destClean = destinationName.toUpperCase()
+  const nfPart = invStr ? ` : NF ${invStr}` : ''
+
+  return `ENTREGUE${nfPart} - ${destClean}${cityClean}`
 }
 
 export function generateArrivalEmailHtml(data: ArrivalEmailData): string {
@@ -190,6 +226,195 @@ export function generateArrivalEmailHtml(data: ArrivalEmailData): string {
 `
 }
 
+export function generateCompletionEmailHtml(data: CompletionEmailData): string {
+  const greeting = getGreeting()
+  const arrivalFormatted = data.arrivalTime ? formatTimeForEmail(data.arrivalTime) : '--:--'
+  const departureFormatted = data.departureTime ? formatTimeForEmail(data.departureTime) : formatTimeForEmail(new Date())
+  const dateFormatted = formatDateForEmail(data.departureTime || new Date())
+  const invoicesStr = Array.isArray(data.invoices)
+    ? data.invoices.filter(Boolean).join(', ')
+    : data.invoices || 'S/ NF'
+  const destination = data.destinationName || 'Destino'
+
+  return `
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Entrega Realizada com Sucesso</title>
+  <style>
+    body {
+      font-family: Arial, Helvetica, sans-serif;
+      color: #1c1917;
+      margin: 0;
+      padding: 24px;
+      background-color: #ffffff;
+      line-height: 1.5;
+    }
+    .container {
+      max-width: 650px;
+      margin: 0 auto;
+    }
+    .greeting {
+      font-size: 15px;
+      margin-bottom: 18px;
+    }
+    .status-msg {
+      font-size: 15px;
+      font-weight: 500;
+      margin-bottom: 24px;
+      color: #15803d;
+    }
+    table.arrival-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 16px;
+      margin-bottom: 24px;
+      border: 1px solid #000000;
+      font-size: 14px;
+    }
+    table.arrival-table th {
+      border: 1px solid #000000;
+      padding: 10px 14px;
+      background-color: #f8fafc;
+      font-weight: bold;
+      text-align: center;
+      color: #0f172a;
+    }
+    table.arrival-table td {
+      border: 1px solid #000000;
+      padding: 10px 14px;
+      text-align: center;
+      color: #1e293b;
+    }
+    .photo-box {
+      margin-top: 20px;
+      margin-bottom: 25px;
+      padding: 14px;
+      background-color: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
+    }
+    .photo-btn {
+      display: inline-block;
+      padding: 8px 16px;
+      background-color: #0d9488;
+      color: #ffffff !important;
+      text-decoration: none;
+      font-weight: bold;
+      font-size: 13px;
+      border-radius: 4px;
+      margin-top: 6px;
+    }
+    .signature {
+      margin-top: 40px;
+      padding-top: 16px;
+      border-top: 1px solid #e2e8f0;
+      font-size: 14px;
+      color: #334155;
+    }
+    .sig-name {
+      font-size: 18px;
+      font-weight: bold;
+      color: #dc2626;
+      margin-bottom: 2px;
+    }
+    .sig-role {
+      font-size: 13px;
+      color: #64748b;
+      margin-bottom: 8px;
+    }
+    .sig-brand {
+      display: inline-block;
+      font-size: 24px;
+      font-weight: 900;
+      color: #dc2626;
+      letter-spacing: -0.5px;
+      margin: 10px 0;
+    }
+    .sig-contact {
+      font-size: 13px;
+      color: #475569;
+      line-height: 1.6;
+    }
+    .sig-email {
+      font-weight: bold;
+      color: #dc2626;
+      text-decoration: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="greeting">${greeting}</div>
+    
+    <div class="status-msg">Entrega realizada com sucesso.</div>
+
+    <table class="arrival-table">
+      <thead>
+        <tr>
+          <th>NF</th>
+          <th>DESTINO</th>
+          <th>STATUS</th>
+          <th>CHEGADA</th>
+          <th>SAIDA</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>${invoicesStr}</strong></td>
+          <td>${destination}</td>
+          <td>ENTREGUE ${dateFormatted}</td>
+          <td>${arrivalFormatted}</td>
+          <td>${departureFormatted}</td>
+        </tr>
+      </tbody>
+    </table>
+
+    ${data.checkinPhotoUrl ? `
+    <div class="photo-box">
+      <div style="font-size: 13px; font-weight: bold; color: #1e293b;">Comprovante / Registro de Portaria:</div>
+      <p style="font-size: 12px; color: #64748b; margin: 4px 0 8px 0;">O motorista registrou a imagem comprobatória no momento da operação.</p>
+      <a href="${data.checkinPhotoUrl}" target="_blank" class="photo-btn">
+        📷 Visualizar Foto Comprobatória
+      </a>
+    </div>
+    ` : ''}
+
+    <div class="signature">
+      <div class="sig-name">Atendimento AuditCargo</div>
+      <div class="sig-role">Operações de Transporte & Telemetria Portuária</div>
+      
+      <div class="sig-brand">
+        <span style="border: 2px solid #0d9488; border-radius: 50%; padding: 2px 7px; margin-right: 4px; font-size: 16px; color: #0d9488;">A</span><span style="color: #0f172a;">uditCargo</span>
+      </div>
+
+      <div class="sig-contact">
+        <div>E-mail: <span class="sig-email" style="color: #0d9488;">${process.env.SMTP_USER || 'amazingflowsuite@gmail.com'}</span></div>
+        <div>Telefones: <strong>(11) 5023-0008 / (11) 2611-7570</strong></div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
+`
+}
+
+function resolveCcList(extraCc?: string[]): string[] | undefined {
+  const envCc = process.env.EMAIL_NOTIFY_CC
+    ? process.env.EMAIL_NOTIFY_CC.split(',').map((e) => e.trim())
+    : []
+
+  const combined = [...envCc, ...(extraCc || [])]
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean)
+
+  // Remove duplicados e bloqueia domínio restrito
+  const unique = Array.from(new Set(combined)).filter((e) => !e.includes('@ccargo.com.br'))
+
+  return unique.length > 0 ? unique : undefined
+}
+
 export async function sendArrivalEmail(data: ArrivalEmailData): Promise<{
   success: boolean
   messageId?: string
@@ -225,12 +450,7 @@ export async function sendArrivalEmail(data: ArrivalEmailData): Promise<{
   const smtpPass = process.env.SMTP_PASS
   const smtpFrom = process.env.SMTP_FROM || `AuditCargo <${smtpUser || 'amazingflowsuite@gmail.com'}>`
 
-  // Filtra rigorosamente qualquer e-mail do domínio @ccargo.com.br da lista de cópia (Cc)
-  const ccEmails = process.env.EMAIL_NOTIFY_CC
-    ? process.env.EMAIL_NOTIFY_CC.split(',')
-        .map((e) => e.trim())
-        .filter((e) => e && !e.toLowerCase().includes('@ccargo.com.br'))
-    : undefined
+  const ccEmails = resolveCcList(data.extraCc)
 
   // Modo simulação se SMTP não configurado
   if (!smtpHost || !smtpUser) {
@@ -279,6 +499,110 @@ export async function sendArrivalEmail(data: ArrivalEmailData): Promise<{
     }
   } catch (err: any) {
     console.error('Erro ao enviar e-mail via SMTP:', err)
+    return {
+      success: false,
+      error: err.message || 'Falha no servidor SMTP',
+    }
+  }
+}
+
+export async function sendCompletionEmail(data: CompletionEmailData): Promise<{
+  success: boolean
+  messageId?: string
+  simulated?: boolean
+  error?: string
+}> {
+  if (!data.toEmail || !data.toEmail.includes('@')) {
+    return {
+      success: false,
+      error: 'Destinatário não possui e-mail cadastrado.',
+    }
+  }
+
+  // Trava de segurança: NUNCA disparar para @ccargo.com.br em ambiente de teste
+  if (data.toEmail.toLowerCase().includes('@ccargo.com.br')) {
+    console.warn(`⚠️ [BLOQUEIO DE SEGURANÇA] Envio abortado: destinatário com domínio @ccargo.com.br (${data.toEmail}) bloqueado para testes.`)
+    return {
+      success: false,
+      error: 'Envios para @ccargo.com.br estão temporariamente desativados por segurança.',
+    }
+  }
+
+  const subject = generateCompletionEmailSubject(
+    data.destinationName,
+    data.destinationCity,
+    data.invoices
+  )
+  const html = generateCompletionEmailHtml(data)
+
+  const smtpHost = process.env.SMTP_HOST || 'smtp.gmail.com'
+  const smtpPort = process.env.SMTP_PORT ? parseInt(process.env.SMTP_PORT) : 465
+  const smtpUser = process.env.SMTP_USER
+  const smtpPass = process.env.SMTP_PASS
+  const smtpFrom = process.env.SMTP_FROM || `AuditCargo <${smtpUser || 'amazingflowsuite@gmail.com'}>`
+
+  const ccEmails = resolveCcList(data.extraCc)
+
+  // Modo simulação se SMTP não configurado
+  if (!smtpHost || !smtpUser) {
+    console.log('\n======================================================')
+    console.log('📨 [AUDITCARGO - ENVIO DE E-MAIL DE FINALIZAÇÃO (SIMULADO)]')
+    console.log(`Para: ${data.toEmail}`)
+    if (ccEmails) console.log(`Cc: ${ccEmails.join(', ')}`)
+    console.log(`Assunto: ${subject}`)
+    console.log(`Chegada: ${data.arrivalTime ? formatTimeForEmail(data.arrivalTime) : '--:--'}`)
+    console.log(`Saída: ${formatTimeForEmail(data.departureTime || new Date())}`)
+    console.log(`Destino: ${data.destinationName}`)
+    console.log(`NF(s): ${Array.isArray(data.invoices) ? data.invoices.join(', ') : data.invoices}`)
+    console.log('Status: Entrega concluída e comunicada aos destinatários e cópias.')
+    console.log('======================================================\n')
+
+    return {
+      success: true,
+      simulated: true,
+      messageId: `simulated_${Date.now()}`,
+    }
+  }
+
+  try {
+    const transporter = nodemailer.createTransport({
+      host: smtpHost,
+      port: smtpPort,
+      secure: smtpPort === 465,
+      auth: {
+        user: smtpUser,
+        pass: smtpPass,
+      },
+    })
+
+    const mailOptions: any = {
+      from: smtpFrom,
+      to: data.toEmail,
+      cc: ccEmails,
+      subject: subject,
+      html: html,
+    }
+
+    // Se houver foto e for uma URL pública válida, podemos anexar
+    if (data.checkinPhotoUrl && data.checkinPhotoUrl.startsWith('http')) {
+      mailOptions.attachments = [
+        {
+          filename: 'comprovante-entrega.jpg',
+          path: data.checkinPhotoUrl,
+        },
+      ]
+    }
+
+    const info = await transporter.sendMail(mailOptions)
+
+    console.log(`📨 E-mail de finalização enviado com sucesso para ${data.toEmail}: ${info.messageId}`)
+    return {
+      success: true,
+      messageId: info.messageId,
+      simulated: false,
+    }
+  } catch (err: any) {
+    console.error('Erro ao enviar e-mail de finalização via SMTP:', err)
     return {
       success: false,
       error: err.message || 'Falha no servidor SMTP',

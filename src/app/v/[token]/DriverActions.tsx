@@ -103,7 +103,14 @@ export function DriverActions({
 
   const handleCheckout = () => {
     startTransition(async () => {
-      await registerCheckout(tripId)
+      const res = await registerCheckout(tripId)
+      if (res?.emailSent) {
+        setEmailStatusMsg(
+          res.simulated
+            ? `E-mail de saída enviado para ${res.recipientEmail} (Simulado)`
+            : `E-mail de saída enviado para ${res.recipientEmail} e cópias!`
+        )
+      }
     })
   }
 
@@ -341,6 +348,16 @@ export function DriverActions({
               Finalizada às {new Date(completionTime).toLocaleTimeString('pt-BR')} em {new Date(completionTime).toLocaleDateString('pt-BR')}
             </p>
           )}
+
+          {/* Confirmação do Envio do E-mail de Saída */}
+          <div className="pt-2">
+            <div className="p-2 rounded-[6px] bg-white border border-[#A7F3D0] text-[11px] text-[#065F46] flex items-center justify-center gap-1.5 shadow-2xs">
+              <Mail className="w-3.5 h-3.5 text-[#059669] shrink-0" />
+              <span>
+                {emailStatusMsg || 'Aviso de finalização e saída com horário oficial disparado por e-mail.'}
+              </span>
+            </div>
+          </div>
 
           {checkinPhotoUrl && (
             <div className="pt-2">
