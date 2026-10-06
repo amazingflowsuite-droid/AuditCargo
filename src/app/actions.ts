@@ -156,12 +156,53 @@ export async function createDriver(formData: FormData) {
   const { data, error } = await supabase
     .from('drivers')
     .insert([{ company_id, name, cpf, phone, default_plate, pin }])
-    .select()
+    .select('*, companies(name)')
     .single()
 
   if (error) return { error: error.message }
   revalidatePath('/motoristas')
   return { success: true, data }
+}
+
+export async function updateDriver(id: string, formData: FormData) {
+  const supabase = await createClient()
+  const company_id = formData.get('company_id') as string
+  const name = formData.get('name') as string
+  const cpf = formData.get('cpf') as string
+  const phone = formData.get('phone') as string
+  const default_plate = formData.get('default_plate') as string
+  const pin = formData.get('pin') as string
+
+  const updatePayload: Record<string, any> = { company_id, name, cpf, phone, default_plate }
+  if (pin) {
+    updatePayload.pin = pin
+  }
+
+  const { data, error } = await supabase
+    .from('drivers')
+    .update(updatePayload)
+    .eq('id', id)
+    .select('*, companies(name)')
+    .single()
+
+  if (error) return { error: error.message }
+  revalidatePath('/motoristas')
+  return { success: true, data }
+}
+
+export async function deleteDriver(id: string) {
+  const supabase = await createClient()
+  const { error } = await supabase.from('drivers').delete().eq('id', id)
+
+  if (error) {
+    if (error.message.includes('foreign key') || error.code === '23503') {
+      return { error: 'Não é possível excluir este motorista pois existem transportes vinculados a ele.' }
+    }
+    return { error: error.message }
+  }
+
+  revalidatePath('/motoristas')
+  return { success: true }
 }
 
 // --- VIAGENS / TRANSPORTES ---
