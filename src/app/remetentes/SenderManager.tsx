@@ -51,6 +51,7 @@ export function SenderManager({
   const [cnpj, setCnpj] = useState('')
   const [ie, setIe] = useState('')
   const [phone, setPhone] = useState('')
+  const [franchiseHours, setFranchiseHours] = useState('0')
 
   // Edição
   const [editingId, setEditingId] = useState<string | null>(null)
@@ -62,6 +63,7 @@ export function SenderManager({
   const [editCnpj, setEditCnpj] = useState('')
   const [editIe, setEditIe] = useState('')
   const [editPhone, setEditPhone] = useState('')
+  const [editFranchiseHours, setEditFranchiseHours] = useState('0')
 
   // Deleção
   const [deletingId, setDeletingId] = useState<string | null>(null)
@@ -91,6 +93,7 @@ export function SenderManager({
     formData.append('cnpj', cnpj)
     formData.append('ie', ie)
     formData.append('phone', phone)
+    formData.append('franchise_hours', franchiseHours)
 
     startTransition(async () => {
       const res = await createSender(formData)
@@ -103,6 +106,7 @@ export function SenderManager({
         setCnpj('')
         setIe('')
         setPhone('')
+        setFranchiseHours('0')
       }
     })
   }
@@ -117,6 +121,7 @@ export function SenderManager({
     setEditCnpj(s.cnpj || '')
     setEditIe(s.ie || '')
     setEditPhone(s.phone || '')
+    setEditFranchiseHours(s.franchise_hours ? String(s.franchise_hours) : '0')
   }
 
   const cancelEdit = () => {
@@ -133,6 +138,7 @@ export function SenderManager({
     formData.append('cnpj', editCnpj)
     formData.append('ie', editIe)
     formData.append('phone', editPhone)
+    formData.append('franchise_hours', editFranchiseHours)
 
     startTransition(async () => {
       const res = await updateSender(id, formData)
@@ -310,14 +316,28 @@ export function SenderManager({
                 </div>
               </div>
 
-              <div className="space-y-1">
-                <Label htmlFor="phone">Telefone / Fone</Label>
-                <Input
-                  id="phone"
-                  value={phone}
-                  onChange={(e) => setPhone(formatPhone(e.target.value))}
-                  placeholder="(11) 99999-9999"
-                />
+              <div className="grid grid-cols-2 gap-2">
+                <div className="space-y-1">
+                  <Label htmlFor="phone">Telefone / Fone</Label>
+                  <Input
+                    id="phone"
+                    value={phone}
+                    onChange={(e) => setPhone(formatPhone(e.target.value))}
+                    placeholder="(11) 99999-9999"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="franchiseHours">Franquia Contratada (Horas)</Label>
+                  <Input
+                    id="franchiseHours"
+                    type="number"
+                    step="0.5"
+                    min="0"
+                    value={franchiseHours}
+                    onChange={(e) => setFranchiseHours(e.target.value)}
+                    placeholder="Ex: 4"
+                  />
+                </div>
               </div>
 
               <Button type="submit" className="w-full mt-2" disabled={isPending}>
@@ -435,6 +455,19 @@ export function SenderManager({
                             />
                           </div>
                         </div>
+                        <div className="grid grid-cols-2 gap-1.5">
+                          <div>
+                            <Label className="text-[11px]">Franquia de Espera (Horas)</Label>
+                            <Input
+                              type="number"
+                              step="0.5"
+                              min="0"
+                              value={editFranchiseHours}
+                              onChange={(e) => setEditFranchiseHours(e.target.value)}
+                              className="h-8 text-xs mt-0.5"
+                            />
+                          </div>
+                        </div>
 
                         <div className="flex items-center gap-2 pt-1">
                           <Button
@@ -475,12 +508,19 @@ export function SenderManager({
                             <span>{s.city} {s.zip_code ? `- CEP: ${s.zip_code}` : ''}</span>
                           </div>
                         )}
-                        {s.phone && (
-                          <div className="flex items-center gap-1.5 font-mono text-[11px]">
-                            <Phone className="w-3 h-3 text-[#0D9488] shrink-0" />
-                            <span>{s.phone}</span>
-                          </div>
-                        )}
+                        <div className="flex items-center gap-4">
+                          {s.phone && (
+                            <div className="flex items-center gap-1.5 font-mono text-[11px]">
+                              <Phone className="w-3 h-3 text-[#0D9488] shrink-0" />
+                              <span>{s.phone}</span>
+                            </div>
+                          )}
+                          {s.franchise_hours !== undefined && s.franchise_hours > 0 && (
+                            <div className="flex items-center gap-1.5 font-mono text-[11px] text-[#CA8A04] bg-yellow-50 px-1.5 py-0.5 rounded-[4px] border border-yellow-200">
+                              <span>⏱ Franquia: {s.franchise_hours}h</span>
+                            </div>
+                          )}
+                        </div>
                       </div>
 
                       {s.address && (

@@ -113,6 +113,7 @@ export function NewTransportForm({
         service_type: serviceType,
         status,
         sender: finalSenderName,
+        sender_id: currentSender.id,
         destination: finalDestinationName,
         invoices: Array.from(new Set(allInvoices)),
         recipient_email: recipientEmail,

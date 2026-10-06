@@ -708,6 +708,7 @@ export async function createTrip(payload: {
   service_type: string
   status: string
   sender?: string
+  sender_id?: string
   destination: string
   invoices: string[]
   recipient_email?: string
@@ -731,6 +732,7 @@ export async function createTrip(payload: {
     service_type: payload.service_type || 'Estadia',
     status: payload.status || 'in_transit',
     sender: payload.sender || null,
+    sender_id: payload.sender_id || null,
     destination: payload.destination,
     invoices: payload.invoices || [],
     recipients: payload.recipients || [],
@@ -1335,6 +1337,8 @@ export async function createSender(formData: FormData) {
   const cnpj = formData.get('cnpj') as string
   const ie = formData.get('ie') as string
   const phone = formData.get('phone') as string
+  const franchise_hours = formData.get('franchise_hours') ? parseFloat(formData.get('franchise_hours') as string) : 0
+  const demurrage_hourly_rate = formData.get('demurrage_hourly_rate') ? parseFloat(formData.get('demurrage_hourly_rate') as string) : 0
 
   const { data, error } = await supabase
     .from('senders')
@@ -1348,6 +1352,8 @@ export async function createSender(formData: FormData) {
         cnpj,
         ie,
         phone,
+        franchise_hours,
+        demurrage_hourly_rate,
         organization_id: user.organization_id,
       },
     ])
@@ -1374,10 +1380,12 @@ export async function updateSender(id: string, formData: FormData) {
   const cnpj = formData.get('cnpj') as string
   const ie = formData.get('ie') as string
   const phone = formData.get('phone') as string
+  const franchise_hours = formData.get('franchise_hours') ? parseFloat(formData.get('franchise_hours') as string) : 0
+  const demurrage_hourly_rate = formData.get('demurrage_hourly_rate') ? parseFloat(formData.get('demurrage_hourly_rate') as string) : 0
 
   const { data, error } = await supabase
     .from('senders')
-    .update({ company_id: company_id || null, name, address, city, zip_code, cnpj, ie, phone })
+    .update({ company_id: company_id || null, name, address, city, zip_code, cnpj, ie, phone, franchise_hours, demurrage_hourly_rate })
     .eq('id', id)
     .eq('organization_id', user.organization_id)
     .select('*, companies(name), recipients(*)')

@@ -19,6 +19,7 @@ import {
   Shield,
   User,
   Crown,
+  TimerReset,
 } from "lucide-react"
 import { signOutAction } from "@/app/actions"
 import type { UserProfile } from "@/utils/supabase/auth"
@@ -152,6 +153,20 @@ export function Navbar({ currentUser }: NavbarProps) {
                 <Compass className={`w-4 h-4 ${pathname === "/" ? "text-[#0D9488]" : "text-[#A8A29E]"}`} />
                 Painel
               </Link>
+
+              {isAdmin && (
+                <Link
+                  href="/estadias"
+                  className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-[6px] text-sm font-medium transition-all whitespace-nowrap ${
+                    pathname === "/estadias"
+                      ? "bg-[#1E293B] text-[#0D9488] font-semibold"
+                      : "text-[#E7E5E4] hover:bg-[#1E293B]/60 hover:text-white"
+                  }`}
+                >
+                  <TimerReset className={`w-4 h-4 ${pathname === "/estadias" ? "text-[#0D9488]" : "text-[#A8A29E]"}`} />
+                  Estadias
+                </Link>
+              )}
 
               {/* Menu Dropdown: Cadastros */}
               <div className="relative" ref={dropdownRef}>
@@ -389,6 +404,21 @@ export function Navbar({ currentUser }: NavbarProps) {
               <Compass className="w-4 h-4 text-[#0D9488]" />
               Painel de Controle
             </Link>
+
+            {isAdmin && (
+              <Link
+                href="/estadias"
+                onClick={() => setMobileMenuOpen(false)}
+                className={`flex items-center gap-3 px-3 py-2 rounded-[6px] text-sm font-medium transition-colors ${
+                  pathname === "/estadias"
+                    ? "bg-[#1E293B] text-[#0D9488] font-semibold"
+                    : "text-[#E2E8F0] hover:bg-[#1E293B]"
+                }`}
+              >
+                <TimerReset className="w-4 h-4 text-[#0D9488]" />
+                Apuração de Estadias
+              </Link>
+            )}
 
             {isAdmin && (
               <Link
