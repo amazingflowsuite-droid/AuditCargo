@@ -23,7 +23,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { createTenantAction, toggleTenantStatusAction } from '@/app/actions'
+import { createTenantAction, toggleTenantStatusAction, updateTenantAction } from '@/app/actions'
 
 interface TenantItem {
   id: string
@@ -32,6 +32,7 @@ interface TenantItem {
   slug: string
   active: boolean
   created_at: string
+  logo_url?: string | null
   user_count: number
   trip_count: number
   admin_info: {
@@ -60,6 +61,11 @@ export function MasterManager({ initialTenants }: MasterManagerProps) {
   const [adminName, setAdminName] = useState('')
   const [adminEmail, setAdminEmail] = useState('')
   const [adminPassword, setAdminPassword] = useState('')
+
+  // Campos de edição
+  const [editModalOpen, setEditModalOpen] = useState(false)
+  const [editingTenantId, setEditingTenantId] = useState('')
+  const [logoUrl, setLogoUrl] = useState('')
 
   useEffect(() => {
     setTenants(initialTenants)
@@ -129,6 +135,56 @@ export function MasterManager({ initialTenants }: MasterManagerProps) {
         ])
       }
     })
+  }
+
+  const openEditModal = (t: TenantItem) => {
+    setError('')
+    setSuccessMsg('')
+    setEditingTenantId(t.id)
+    setCompanyName(t.name)
+    setCnpj(t.cnpj || '')
+    setLogoUrl(t.logo_url || '')
+    setEditModalOpen(true)
+  }
+
+  const handleUpdateTenant = (e: React.FormEvent) => {
+    e.preventDefault()
+    setError('')
+    setSuccessMsg('')
+
+    const formData = new FormData()
+    formData.append('companyName', companyName)
+    formData.append('cnpj', cnpj)
+    formData.append('logoUrl', logoUrl)
+
+    startTransition(async () => {
+      const res = await updateTenantAction(editingTenantId, formData)
+      if (res?.error) {
+        setError(res.error)
+      } else {
+        setSuccessMsg(`Empresa "${companyName}" atualizada com sucesso!`)
+        setEditModalOpen(false)
+        // Atualiza localmente
+        setTenants((prev) =>
+          prev.map((t) => (t.id === editingTenantId ? { ...t, name: companyName, cnpj: cnpj || null, logo_url: logoUrl } : t))
+        )
+      }
+    })
+  }
+
+  const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) {
+      if (file.size > 200 * 1024) {
+        setError('O logo deve ter no máximo 200KB.')
+        return
+      }
+      const reader = new FileReader()
+      reader.onloadend = () => {
+        setLogoUrl(reader.result as string)
+      }
+      reader.readAsDataURL(file)
+    }
   }
 
   const handleToggleStatus = (tenant: TenantItem) => {
@@ -329,19 +385,30 @@ export function MasterManager({ initialTenants }: MasterManagerProps) {
                     </td>
 
                     <td className="px-5 py-4 text-right">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={isPending}
-                        onClick={() => setStatusConfirmModal(t)}
-                        className={`h-8 px-2.5 text-xs font-semibold ${
-                          t.active
-                            ? 'text-red-700 hover:text-red-800 hover:bg-red-50 border-red-200'
-                            : 'text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50 border-emerald-200'
-                        }`}
-                      >
-                        {t.active ? 'Bloquear Acesso' : 'Reativar Empresa'}
-                      </Button>
+                      <div className="flex items-center justify-end gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={isPending}
+                          onClick={() => openEditModal(t)}
+                          className="h-8 px-2.5 text-xs font-semibold text-[#0F172A] hover:bg-slate-100 border-[#E7E5E4]"
+                        >
+                          Editar
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          disabled={isPending}
+                          onClick={() => setStatusConfirmModal(t)}
+                          className={`h-8 px-2.5 text-xs font-semibold ${
+                            t.active
+                              ? 'text-red-700 hover:text-red-800 hover:bg-red-50 border-red-200'
+                              : 'text-emerald-700 hover:text-emerald-800 hover:bg-emerald-50 border-emerald-200'
+                          }`}
+                        >
+                          {t.active ? 'Bloquear Acesso' : 'Reativar Empresa'}
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -350,6 +417,106 @@ export function MasterManager({ initialTenants }: MasterManagerProps) {
           </table>
         </div>
       </Card>
+
+      {/* Modal: Editar Empresa Cliente */}
+      {editModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white rounded-[12px] border border-[#E7E5E4] shadow-2xl max-w-lg w-full overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-4 bg-[#0F172A] text-white">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-[6px] bg-[#0D9488] flex items-center justify-center text-white font-bold">
+                  <Building2 className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-base">Editar Organização</h3>
+                  <p className="text-[11px] text-slate-400 font-mono">Atualize os dados e o logotipo do tenant</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditModalOpen(false)}
+                className="text-slate-400 hover:text-white"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateTenant} className="p-6 space-y-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="editCompanyName" className="text-xs font-semibold">
+                  Razão Social / Nome da Empresa *
+                </Label>
+                <Input
+                  id="editCompanyName"
+                  type="text"
+                  value={companyName}
+                  onChange={(e) => setCompanyName(e.target.value)}
+                  required
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="editCnpj" className="text-xs font-semibold">
+                  CNPJ da Empresa
+                </Label>
+                <Input
+                  id="editCnpj"
+                  type="text"
+                  value={cnpj}
+                  onChange={(e) => setCnpj(e.target.value)}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="editLogo" className="text-xs font-semibold">
+                  Logotipo da Empresa (Max 200KB)
+                </Label>
+                <div className="flex items-center gap-4">
+                  {logoUrl ? (
+                    <div className="w-12 h-12 rounded-[6px] border border-[#E7E5E4] flex items-center justify-center overflow-hidden bg-white shrink-0">
+                      <img src={logoUrl} alt="Logo Preview" className="w-full h-full object-contain" />
+                    </div>
+                  ) : (
+                    <div className="w-12 h-12 rounded-[6px] border border-[#E7E5E4] bg-slate-50 flex items-center justify-center text-slate-400 shrink-0">
+                      <Building2 className="w-5 h-5" />
+                    </div>
+                  )}
+                  <Input
+                    id="editLogo"
+                    type="file"
+                    accept="image/*"
+                    onChange={handleLogoChange}
+                    className="text-xs"
+                  />
+                </div>
+                {logoUrl && (
+                  <Button type="button" variant="ghost" onClick={() => setLogoUrl('')} className="h-auto p-0 text-xs text-red-600 hover:text-red-700 hover:bg-transparent">
+                    Remover logotipo
+                  </Button>
+                )}
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-4 border-t border-[#E7E5E4]">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setEditModalOpen(false)}
+                  disabled={isPending}
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  type="submit"
+                  disabled={isPending}
+                  className="bg-[#0D9488] hover:bg-[#0F766E] text-white font-semibold"
+                >
+                  {isPending ? 'Salvando...' : 'Salvar Alterações'}
+                </Button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
 
       {/* Modal: Cadastrar Nova Empresa Cliente */}
       {modalOpen && (

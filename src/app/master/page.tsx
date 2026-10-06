@@ -20,6 +20,7 @@ export default async function MasterPage() {
         slug: String(t.slug || ''),
         active: Boolean(t.active),
         created_at: t.created_at ? String(t.created_at) : new Date().toISOString(),
+        logo_url: t.logo_url ? String(t.logo_url) : null,
         user_count: Number(t.user_count || 0),
         trip_count: Number(t.trip_count || 0),
         admin_info: t.admin_info

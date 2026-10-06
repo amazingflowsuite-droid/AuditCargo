@@ -14,6 +14,7 @@ export type UserProfile = {
     name: string
     cnpj?: string | null
     slug?: string
+    logo_url?: string | null
   }
 }
 
@@ -33,7 +34,7 @@ export async function getCurrentUser(): Promise<UserProfile | null> {
 
   const { data: profile } = await supabase
     .from('profiles')
-    .select('*, organization:organizations(id, name, cnpj, slug)')
+    .select('*, organization:organizations(id, name, cnpj, slug, logo_url)')
     .eq('id', user.id)
     .single()
 

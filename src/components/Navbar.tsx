@@ -116,9 +116,15 @@ export function Navbar({ currentUser }: NavbarProps) {
           {/* LADO ESQUERDO: Logo + Navegação Desktop */}
           <div className="flex items-center gap-6 lg:gap-8">
             <Link href="/" className="flex items-center gap-2.5 group shrink-0">
-              <div className="w-9 h-9 rounded-[6px] bg-[#0D9488] flex items-center justify-center text-white shadow-accent-glow">
-                <ShieldCheck className="w-5 h-5" />
-              </div>
+              {currentUser?.organization?.logo_url ? (
+                <div className="w-9 h-9 rounded-[6px] bg-white border border-[#334155] flex items-center justify-center overflow-hidden shrink-0 shadow-accent-glow">
+                  <img src={currentUser.organization.logo_url} alt="Logo" className="w-full h-full object-contain" />
+                </div>
+              ) : (
+                <div className="w-9 h-9 rounded-[6px] bg-[#0D9488] flex items-center justify-center text-white shadow-accent-glow">
+                  <ShieldCheck className="w-5 h-5" />
+                </div>
+              )}
               <div className="flex flex-col">
                 <span className="font-serif-title text-base sm:text-lg font-bold tracking-tight text-white group-hover:text-teal-200 transition-colors whitespace-nowrap">
                   AuditCargo

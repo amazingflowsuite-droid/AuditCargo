@@ -917,28 +917,32 @@ export async function registerCheckin(
   try {
     const trip = data
     if (trip) {
-      let targetEmail = trip.recipient_email || null
+      let targetEmail: string | null = null
+      // Tenta buscar do cadastro atualizado de Destinatários primeiro
+      const { data: recList } = await supabase
+        .from('recipients')
+        .select('name, email')
+        .not('email', 'is', null)
+
+      if (recList && recList.length > 0) {
+        const destLower = (trip.destination || '').toLowerCase()
+        const matched = recList.find((r: any) => {
+          if (!r.email) return false
+          const rNameLower = (r.name || '').toLowerCase()
+          return destLower.includes(rNameLower) || rNameLower.includes(destLower)
+        })
+        if (matched?.email) {
+          targetEmail = matched.email
+        }
+      }
+
+      // Fallback para o e-mail salvo na viagem na hora da criação
+      if (!targetEmail) {
+        targetEmail = trip.recipient_email || null
+      }
       if (!targetEmail && Array.isArray(trip.recipients)) {
         const found = trip.recipients.find((r: any) => r.email && r.email.includes('@'))
         if (found) targetEmail = found.email
-      }
-      if (!targetEmail) {
-        const { data: recList } = await supabase
-          .from('recipients')
-          .select('name, city, email')
-          .not('email', 'is', null)
-
-        if (recList && recList.length > 0) {
-          const destLower = (trip.destination || '').toLowerCase()
-          const matched = recList.find((r: any) => {
-            if (!r.email) return false
-            const rNameLower = (r.name || '').toLowerCase()
-            return destLower.includes(rNameLower) || rNameLower.includes(destLower)
-          })
-          if (matched?.email) {
-            targetEmail = matched.email
-          }
-        }
       }
 
       if (targetEmail) {
@@ -1049,28 +1053,33 @@ export async function registerCheckout(tripId: string) {
   try {
     const trip = data
     if (trip) {
-      let targetEmail = trip.recipient_email || null
+      let targetEmail: string | null = null
+      
+      // Tenta buscar do cadastro atualizado de Destinatários primeiro
+      const { data: recList } = await supabase
+        .from('recipients')
+        .select('name, email')
+        .not('email', 'is', null)
+
+      if (recList && recList.length > 0) {
+        const destLower = (trip.destination || '').toLowerCase()
+        const matched = recList.find((r: any) => {
+          if (!r.email) return false
+          const rNameLower = (r.name || '').toLowerCase()
+          return destLower.includes(rNameLower) || rNameLower.includes(destLower)
+        })
+        if (matched?.email) {
+          targetEmail = matched.email
+        }
+      }
+
+      // Fallback para o e-mail salvo na viagem na hora da criação
+      if (!targetEmail) {
+        targetEmail = trip.recipient_email || null
+      }
       if (!targetEmail && Array.isArray(trip.recipients)) {
         const found = trip.recipients.find((r: any) => r.email && r.email.includes('@'))
         if (found) targetEmail = found.email
-      }
-      if (!targetEmail) {
-        const { data: recList } = await supabase
-          .from('recipients')
-          .select('name, city, email')
-          .not('email', 'is', null)
-
-        if (recList && recList.length > 0) {
-          const destLower = (trip.destination || '').toLowerCase()
-          const matched = recList.find((r: any) => {
-            if (!r.email) return false
-            const rNameLower = (r.name || '').toLowerCase()
-            return destLower.includes(rNameLower) || rNameLower.includes(destLower)
-          })
-          if (matched?.email) {
-            targetEmail = matched.email
-          }
-        }
       }
 
       if (targetEmail) {
@@ -1690,6 +1699,7 @@ export async function getTenantsAction() {
         o.slug,
         o.active,
         o.created_at,
+        o.logo_url,
         (SELECT COUNT(*)::int FROM public.profiles p WHERE p.organization_id = o.id) as user_count,
         (SELECT COUNT(*)::int FROM public.trips t WHERE t.organization_id = o.id) as trip_count,
         (
@@ -1967,6 +1977,42 @@ export async function toggleTenantStatusAction(orgId: string, active: boolean) {
   } catch (err: any) {
     console.error('Erro ao alterar status do tenant:', err)
     return { error: err.message || 'Erro ao alterar status do tenant.' }
+  } finally {
+    if (client) client.release()
+  }
+}
+
+export async function updateTenantAction(orgId: string, formData: FormData) {
+  await requireSuperAdmin()
+  const companyName = (formData.get('companyName') as string)?.trim()
+  const cnpj = (formData.get('cnpj') as string)?.trim() || null
+  const logoUrl = (formData.get('logoUrl') as string) || null
+
+  if (!companyName) {
+    return { error: 'O nome da empresa / organização é obrigatório.' }
+  }
+
+  const pool = getDbPool()
+  let client
+  try {
+    client = await pool.connect()
+    await client.query(`
+      UPDATE public.organizations 
+      SET name = $1, cnpj = $2, logo_url = $3, updated_at = now() 
+      WHERE id = $4::uuid;
+    `, [companyName, cnpj, logoUrl, orgId])
+
+    await client.query(`
+      UPDATE public.companies
+      SET name = $1, cnpj = $2
+      WHERE organization_id = $3::uuid;
+    `, [companyName, cnpj, orgId])
+
+    revalidatePath('/master')
+    return { success: true }
+  } catch (err: any) {
+    console.error('Erro ao atualizar tenant:', err)
+    return { error: err.message || 'Erro ao atualizar dados do tenant.' }
   } finally {
     if (client) client.release()
   }
