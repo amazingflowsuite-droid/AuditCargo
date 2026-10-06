@@ -29,6 +29,7 @@ export default async function RootLayout({
       name: currentUser.organization.name,
       cnpj: currentUser.organization.cnpj,
       slug: currentUser.organization.slug,
+      logo_url: currentUser.organization.logo_url,
     } : null
   } : null;
 
