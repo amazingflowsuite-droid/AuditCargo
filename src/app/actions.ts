@@ -2,6 +2,7 @@
 
 import { createClient } from '@/utils/supabase/server'
 import { revalidatePath } from 'next/cache'
+import { cookies } from 'next/headers'
 import { sendArrivalEmail } from '@/utils/mailer'
 
 // --- EMPRESAS ---
@@ -150,10 +151,11 @@ export async function createDriver(formData: FormData) {
   const cpf = formData.get('cpf') as string
   const phone = formData.get('phone') as string
   const default_plate = formData.get('default_plate') as string
+  const pin = formData.get('pin') as string || '1234'
 
   const { data, error } = await supabase
     .from('drivers')
-    .insert([{ company_id, name, cpf, phone, default_plate }])
+    .insert([{ company_id, name, cpf, phone, default_plate, pin }])
     .select()
     .single()
 
@@ -226,7 +228,7 @@ export async function createTrip(payload: {
     `)
     .single()
 
-  // Se der erro por coluna recipient_email não existir no banco, tenta sem a coluna
+  // Se der erro por coluna recipient_email nÃ£o existir no banco, tenta sem a coluna
   if (error && error.message?.includes('recipient_email')) {
     delete insertObj.recipient_email
     const retry = await supabase
@@ -319,7 +321,7 @@ export async function registerCheckin(
     return { error: error.message }
   }
 
-  // --- DISPARO DE E-MAIL AUTOMÁTICO DE CHEGADA AO DESTINATÁRIO ---
+  // --- DISPARO DE E-MAIL AUTOMÃTICO DE CHEGADA AO DESTINATÃRIO ---
   let emailSent = false
   let recipientEmailTarget: string | undefined = undefined
   let emailSimulated = false
@@ -330,13 +332,13 @@ export async function registerCheckin(
       // 1. Tenta pegar de recipient_email direto na trip
       let targetEmail = trip.recipient_email || null
 
-      // 2. Tenta pegar do array de destinatários salvo na viagem
+      // 2. Tenta pegar do array de destinatÃ¡rios salvo na viagem
       if (!targetEmail && Array.isArray(trip.recipients)) {
         const found = trip.recipients.find((r: any) => r.email && r.email.includes('@'))
         if (found) targetEmail = found.email
       }
 
-      // 3. Tenta buscar pelo cadastro de destinatários no banco
+      // 3. Tenta buscar pelo cadastro de destinatÃ¡rios no banco
       if (!targetEmail) {
         const { data: recList } = await supabase
           .from('recipients')
@@ -358,7 +360,7 @@ export async function registerCheckin(
 
       if (targetEmail) {
         recipientEmailTarget = targetEmail
-        let destName = trip.destination || 'Destinatário'
+        let destName = trip.destination || 'DestinatÃ¡rio'
         let destCity = ''
         if (destName.includes('-')) {
           const parts = destName.split('-')
@@ -539,7 +541,7 @@ export async function deleteSender(id: string) {
   return { success: true }
 }
 
-// --- DESTINATÁRIOS ---
+// --- DESTINATÃRIOS ---
 export async function getRecipients(senderId?: string) {
   const supabase = await createClient()
   let query = supabase
@@ -598,7 +600,7 @@ export async function createRecipient(formData: FormData) {
     .select('*, companies(name), senders(name, city)')
     .single()
 
-  // Se falhar porque a coluna email ainda não existe na tabela, tenta sem email
+  // Se falhar porque a coluna email ainda nÃ£o existe na tabela, tenta sem email
   if (error && error.message?.includes('email')) {
     delete insertObj.email
     const retry = await supabase
@@ -683,4 +685,30 @@ export async function deleteRecipient(id: string) {
   return { success: true }
 }
 
+
+
+export async function verifyDriverPin(token: string, pin: string) {
+  const supabase = await createClient()
+  
+  const { data: trip } = await supabase
+    .from('trips')
+    .select('id, drivers(pin)')
+    .eq('token', token.toUpperCase())
+    .single()
+    
+  if (!trip) return { error: 'Viagem não encontrada.' }
+  
+  // @ts-ignore
+  const driverPin = trip.drivers?.pin || '1234'
+  
+  if (pin !== driverPin) {
+    return { error: 'PIN incorreto. Tente novamente.' }
+  }
+  
+  const cookieStore = await cookies()
+  cookieStore.set(`driver_auth_${token}`, 'true', { maxAge: 60 * 60 * 24 * 7, httpOnly: true })
+  
+  revalidatePath(`/v/${token}`)
+  return { success: true }
+}
 

@@ -75,6 +75,12 @@ export default async function MotoristasPage() {
                   </div>
                 </div>
 
+                <div className="space-y-1.5">
+                  <Label htmlFor="pin">PIN de Acesso (4 dígitos)</Label>
+                  <Input id="pin" name="pin" type="text" maxLength={4} pattern="\d{4}" placeholder="Ex: 1234" required />
+                  <p className="text-[10px] text-[#78716C]">Senha que o motorista usará para acessar o link da viagem.</p>
+                </div>
+
                 <Button type="submit" className="w-full">
                   Salvar Motorista
                 </Button>

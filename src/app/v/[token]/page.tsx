@@ -1,7 +1,9 @@
 import { createClient } from "@/utils/supabase/server"
 import { notFound } from "next/navigation"
+import { cookies } from "next/headers"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { DriverActions } from "./DriverActions"
+import { PinAuth } from "./PinAuth"
 import { Truck, MapPin, Clock, CheckCircle2, ShieldCheck, FileText, Calendar } from "lucide-react"
 
 export default async function DriverTripPage({
@@ -11,6 +13,8 @@ export default async function DriverTripPage({
 }) {
   const { token } = await params
   const supabase = await createClient()
+  const cookieStore = await cookies()
+  const isAuthorized = cookieStore.get(`driver_auth_${token.toUpperCase()}`)?.value === 'true'
 
   const { data: trip } = await supabase
     .from("trips")
@@ -25,6 +29,10 @@ export default async function DriverTripPage({
 
   if (!trip) {
     notFound()
+  }
+
+  if (!isAuthorized) {
+    return <PinAuth token={token.toUpperCase()} driverName={trip.drivers?.name || 'Motorista'} />
   }
 
   // Mapeamento amigável de status em Português
