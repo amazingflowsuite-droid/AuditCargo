@@ -7,6 +7,11 @@ import { ShieldCheck, Truck, Building2, MapPin, PlusCircle, Compass, Mail } from
 export function Navbar() {
   const pathname = usePathname()
 
+  // Oculta totalmente o menu na visão do motorista (/v/[token])
+  if (pathname?.startsWith('/v/')) {
+    return null
+  }
+
   const navItems = [
     { href: "/", label: "Painel", icon: Compass },
     { href: "/novo-transporte", label: "Novo Transporte", icon: PlusCircle },
