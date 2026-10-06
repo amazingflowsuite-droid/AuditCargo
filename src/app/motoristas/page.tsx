@@ -37,7 +37,7 @@ export default async function MotoristasPage() {
                 Você precisa cadastrar pelo menos uma <strong>Empresa</strong> antes de adicionar motoristas.
               </div>
             ) : (
-              <form action={createDriver} className="space-y-4">
+              <form action={async (formData) => { await createDriver(formData) }} className="space-y-4">
                 <div className="space-y-1.5">
                   <Label htmlFor="company_id">Empresa Vinculada</Label>
                   <select

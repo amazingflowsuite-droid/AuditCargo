@@ -30,8 +30,17 @@ export function NewTripForm({
 
   async function handleSubmit(formData: FormData) {
     setResult(null)
+    const payload = {
+      company_id: formData.get('company_id') as string,
+      branch_id: formData.get('branch_id') as string || undefined,
+      driver_id: formData.get('driver_id') as string,
+      destination: formData.get('destination') as string,
+      invoices: formData.get('invoices') ? (formData.get('invoices') as string).split(',').map(s => s.trim()) : [],
+      service_type: 'Estadia',
+      status: 'in_transit'
+    }
     startTransition(async () => {
-      const res = await createTrip(formData)
+      const res = await createTrip(payload)
       setResult(res)
     })
   }
