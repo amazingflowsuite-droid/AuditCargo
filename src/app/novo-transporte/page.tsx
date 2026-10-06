@@ -16,9 +16,6 @@ export default async function NovoTransportePage() {
         <h1 className="font-serif-title text-2xl font-bold text-[#1C1917] tracking-tight">
           Emissão de Novo Transporte
         </h1>
-        <p className="text-sm text-[#57534E] mt-1">
-          Geração de token de auditoria com DACTE (CT-e), seleção de Remetente e múltiplos Destinatários.
-        </p>
       </div>
 
       <NewTransportForm

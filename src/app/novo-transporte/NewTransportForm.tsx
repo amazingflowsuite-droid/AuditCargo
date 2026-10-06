@@ -14,23 +14,11 @@ import {
   CheckCircle2,
   MessageSquare,
   Copy,
-  Plus,
-  Trash2,
   FileText,
-  Send,
   Users,
   ExternalLink,
   Mail,
 } from "lucide-react"
-
-interface RecipientItem {
-  id: string
-  recipient_id?: string
-  name: string
-  destination: string
-  invoices: string
-  email?: string
-}
 
 export function NewTransportForm({
   companies,
@@ -54,15 +42,10 @@ export function NewTransportForm({
 
   // Remetente Selecionado
   const [selectedSenderId, setSelectedSenderId] = useState<string>('')
-  const [customSender, setCustomSender] = useState<string>('')
 
-  // Destinatário Principal Selecionado
+  // Destinatário Selecionado
   const [selectedRecipientId, setSelectedRecipientId] = useState<string>('')
-  const [customDestination, setCustomDestination] = useState<string>('')
   const [generalInvoices, setGeneralInvoices] = useState<string>('')
-
-  // Destinatários Adicionais (1 Remetente -> N Destinatários)
-  const [additionalRecipients, setAdditionalRecipients] = useState<RecipientItem[]>([])
 
   const [isPending, startTransition] = useTransition()
   const [result, setResult] = useState<any | null>(null)
@@ -72,93 +55,44 @@ export function NewTransportForm({
   const filteredBranches = branches.filter((b) => !selectedCompanyId || b.company_id === selectedCompanyId)
   const filteredDrivers = drivers.filter((d) => !selectedCompanyId || d.company_id === selectedCompanyId)
   const filteredSenders = senders.filter((s) => !selectedCompanyId || s.company_id === selectedCompanyId)
+
+  // Lista estritamente os destinatários vinculados ao remetente selecionado
   const filteredRecipients = registeredRecipients.filter((r) => {
-    if (selectedCompanyId && r.company_id !== selectedCompanyId) return false
-    if (selectedSenderId && selectedSenderId !== 'custom') {
-      return !r.sender_id || r.sender_id === selectedSenderId
-    }
-    return true
+    if (!selectedSenderId) return false
+    return r.sender_id === selectedSenderId
   })
 
   const currentDriver = drivers.find((d) => d.id === selectedDriverId)
   const currentSender = filteredSenders.find((s) => s.id === selectedSenderId)
-  const currentMainRecipient = filteredRecipients.find((r) => r.id === selectedRecipientId)
+  const currentRecipient = filteredRecipients.find((r) => r.id === selectedRecipientId)
 
-  const addRecipient = () => {
-    setAdditionalRecipients([
-      ...additionalRecipients,
-      {
-        id: Math.random().toString(),
-        name: '',
-        destination: '',
-        invoices: '',
-      },
-    ])
-  }
-
-  const removeRecipient = (id: string) => {
-    setAdditionalRecipients(additionalRecipients.filter((r) => r.id !== id))
-  }
-
-  const handleSelectRecipientForStop = (id: string, recipientId: string) => {
-    if (recipientId === 'custom') {
-      setAdditionalRecipients(
-        additionalRecipients.map((r) =>
-          r.id === id ? { ...r, recipient_id: 'custom', name: '', destination: '', email: '' } : r
-        )
-      )
-    } else {
-      const found = filteredRecipients.find((r) => r.id === recipientId)
-      if (found) {
-        setAdditionalRecipients(
-          additionalRecipients.map((r) =>
-            r.id === id
-              ? {
-                  ...r,
-                  recipient_id: recipientId,
-                  name: found.name,
-                  destination: `${found.city || ''} - ${found.address || ''}`,
-                  email: found.email || '',
-                }
-              : r
-          )
-        )
-      }
-    }
-  }
-
-  const updateRecipient = (id: string, field: keyof RecipientItem, value: string) => {
-    setAdditionalRecipients(additionalRecipients.map((r) => (r.id === id ? { ...r, [field]: value } : r)))
+  const handleSenderChange = (senderId: string) => {
+    setSelectedSenderId(senderId)
+    setSelectedRecipientId('')
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setResult(null)
 
-    // Remetente final
-    const finalSenderName =
-      selectedSenderId && selectedSenderId !== 'custom'
-        ? `${currentSender?.name} (${currentSender?.city || ''})`
-        : customSender
+    if (!currentSender) {
+      alert('Selecione um remetente cadastrado.')
+      return
+    }
 
-    // Destinatário principal final
-    const finalMainDest =
-      selectedRecipientId && selectedRecipientId !== 'custom'
-        ? `${currentMainRecipient?.name} - ${currentMainRecipient?.city || ''}`
-        : customDestination
+    if (!currentRecipient) {
+      alert('Selecione um destinatário cadastrado.')
+      return
+    }
 
-    const mainRecipientEmail = currentMainRecipient?.email || undefined
+    const finalSenderName = `${currentSender.name} (${currentSender.city || ''})`
+    const finalDestinationName = `${currentRecipient.name} - ${currentRecipient.city || ''}`
+    const recipientEmail = currentRecipient.email || undefined
 
-    // Agrupa todas as notas fiscais
-    const allInvoices = [
-      ...generalInvoices.split(',').map((n) => n.trim()).filter(Boolean),
-      ...additionalRecipients.flatMap((r) => r.invoices.split(',').map((n) => n.trim()).filter(Boolean)),
-    ]
-
-    const destinationSummary =
-      additionalRecipients.length > 0
-        ? `${finalMainDest} (+${additionalRecipients.length} entregas)`
-        : finalMainDest
+    const allInvoices = generalInvoices
+      .split(',')
+      .map((n) => n.trim())
+      .filter(Boolean)
 
     startTransition(async () => {
       const res = await createTrip({
@@ -169,22 +103,16 @@ export function NewTransportForm({
         service_type: serviceType,
         status,
         sender: finalSenderName,
-        destination: destinationSummary,
+        destination: finalDestinationName,
         invoices: Array.from(new Set(allInvoices)),
-        recipient_email: mainRecipientEmail,
+        recipient_email: recipientEmail,
         recipients: [
           {
-            name: finalMainDest,
-            destination: finalMainDest,
+            name: currentRecipient.name,
+            destination: finalDestinationName,
             invoices: generalInvoices,
-            email: mainRecipientEmail,
+            email: recipientEmail,
           },
-          ...additionalRecipients.map((r) => ({
-            name: r.name,
-            destination: r.destination,
-            invoices: r.invoices,
-            email: r.email,
-          })),
         ],
       })
       setResult(res)
@@ -281,9 +209,10 @@ export function NewTransportForm({
               className="w-full"
               onClick={() => {
                 setResult(null)
-                setAdditionalRecipients([])
                 setCteNumber('')
                 setGeneralInvoices('')
+                setSelectedSenderId('')
+                setSelectedRecipientId('')
               }}
             >
               Emitir Outro Transporte
@@ -434,28 +363,18 @@ export function NewTransportForm({
               </div>
             </div>
 
-            {/* SEÇÃO 3: REMETENTE & DESTINATÁRIOS (INTEGRADOS AO CADASTRO) */}
+            {/* SEÇÃO 3: REMETENTE & DESTINATÁRIO */}
             <div className="space-y-4 p-4 rounded-[8px] bg-[#F5F5F4]/60 border border-[#E7E5E4]">
               <div className="flex items-center justify-between">
                 <h3 className="text-xs font-mono font-bold uppercase text-[#57534E] flex items-center gap-1.5">
-                  <Users className="w-4 h-4 text-[#0D9488]" /> 3. Remetente & Destinatários (1 Remetente → N Entregas)
+                  <Users className="w-4 h-4 text-[#0D9488]" /> 3. Remetente & Destinatário
                 </h3>
-
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={addRecipient}
-                  className="gap-1 h-8 text-xs border-[#0D9488] text-[#0D9488] hover:bg-teal-50"
-                >
-                  <Plus className="w-3.5 h-3.5" /> Adicionar Parada / Destinatário
-                </Button>
               </div>
 
               {/* REMETENTE */}
               <div className="space-y-2">
                 <div className="flex items-center justify-between">
-                  <Label htmlFor="senderSelect">Remetente (Expedidor)</Label>
+                  <Label htmlFor="senderSelect">Remetente</Label>
                   <Link
                     href="/remetentes"
                     target="_blank"
@@ -468,7 +387,8 @@ export function NewTransportForm({
                 <select
                   id="senderSelect"
                   value={selectedSenderId}
-                  onChange={(e) => setSelectedSenderId(e.target.value)}
+                  onChange={(e) => handleSenderChange(e.target.value)}
+                  required
                   className="flex h-11 w-full rounded-[6px] border border-[#D6D3D1] bg-[#FAFAF9] px-3 py-2 text-sm text-[#1C1917] focus-ring"
                 >
                   <option value="">Selecione um Remetente Cadastrado...</option>
@@ -477,7 +397,6 @@ export function NewTransportForm({
                       {s.name} {s.city ? `(${s.city})` : ''} {s.cnpj ? `- CNPJ: ${s.cnpj}` : ''}
                     </option>
                   ))}
-                  <option value="custom">Outro (Digitar Avulso)</option>
                 </select>
 
                 {currentSender && (
@@ -487,22 +406,12 @@ export function NewTransportForm({
                     <span>Fone: <strong>{currentSender.phone || 'S/ Fone'}</strong></span>
                   </div>
                 )}
-
-                {(!selectedSenderId || selectedSenderId === 'custom') && (
-                  <Input
-                    value={customSender}
-                    onChange={(e) => setCustomSender(e.target.value)}
-                    placeholder="Digite o nome/endereço do remetente..."
-                    required={!selectedSenderId || selectedSenderId === 'custom'}
-                    className="mt-1.5"
-                  />
-                )}
               </div>
 
-              {/* DESTINATÁRIO PRINCIPAL */}
+              {/* DESTINATÁRIO */}
               <div className="space-y-2 pt-2 border-t border-[#E7E5E4]">
                 <div className="flex items-center justify-between">
-                  <Label htmlFor="recipientSelect">Destinatário Principal (Primeira Entrega)</Label>
+                  <Label htmlFor="recipientSelect">Destinatário</Label>
                   <Link
                     href="/destinatarios"
                     target="_blank"
@@ -516,26 +425,33 @@ export function NewTransportForm({
                   id="recipientSelect"
                   value={selectedRecipientId}
                   onChange={(e) => setSelectedRecipientId(e.target.value)}
-                  className="flex h-11 w-full rounded-[6px] border border-[#D6D3D1] bg-[#FAFAF9] px-3 py-2 text-sm text-[#1C1917] focus-ring"
+                  disabled={!selectedSenderId}
+                  required
+                  className="flex h-11 w-full rounded-[6px] border border-[#D6D3D1] bg-[#FAFAF9] px-3 py-2 text-sm text-[#1C1917] focus-ring disabled:opacity-50"
                 >
-                  <option value="">Selecione um Destinatário Cadastrado...</option>
+                  <option value="">
+                    {!selectedSenderId
+                      ? 'Selecione primeiro o Remetente...'
+                      : filteredRecipients.length === 0
+                      ? 'Nenhum destinatário vinculado a este Remetente'
+                      : 'Selecione um Destinatário Cadastrado...'}
+                  </option>
                   {filteredRecipients.map((r) => (
                     <option key={r.id} value={r.id}>
                       {r.name} {r.city ? `(${r.city})` : ''} {r.cnpj ? `- CNPJ: ${r.cnpj}` : ''}
                     </option>
                   ))}
-                  <option value="custom">Outro (Digitar Avulso)</option>
                 </select>
 
-                {currentMainRecipient && (
+                {currentRecipient && (
                   <div className="p-2.5 bg-white rounded-[6px] border border-[#E7E5E4] text-xs text-[#57534E] grid grid-cols-1 sm:grid-cols-3 gap-1.5 font-mono">
-                    <span>CNPJ: <strong>{currentMainRecipient.cnpj || 'Não inf.'}</strong></span>
-                    <span>Município: <strong>{currentMainRecipient.city}</strong></span>
-                    <span>Doca/End.: <strong>{currentMainRecipient.address || 'Geral'}</strong></span>
-                    {currentMainRecipient.email ? (
+                    <span>CNPJ: <strong>{currentRecipient.cnpj || 'Não inf.'}</strong></span>
+                    <span>Município: <strong>{currentRecipient.city}</strong></span>
+                    <span>Doca/End.: <strong>{currentRecipient.address || 'Geral'}</strong></span>
+                    {currentRecipient.email ? (
                       <div className="sm:col-span-3 text-[11px] text-teal-800 bg-teal-50 px-2 py-1 rounded border border-teal-200 flex items-center gap-1.5 font-sans mt-0.5">
                         <Mail className="w-3.5 h-3.5 text-[#0D9488] shrink-0" />
-                        <span>Aviso de Chegada automático ativo para: <strong>{currentMainRecipient.email}</strong></span>
+                        <span>Aviso de Chegada automático ativo para: <strong>{currentRecipient.email}</strong></span>
                       </div>
                     ) : (
                       <div className="sm:col-span-3 text-[11px] text-amber-700 bg-amber-50 px-2 py-1 rounded border border-amber-200 flex items-center gap-1.5 font-sans mt-0.5">
@@ -546,18 +462,8 @@ export function NewTransportForm({
                   </div>
                 )}
 
-                {(!selectedRecipientId || selectedRecipientId === 'custom') && (
-                  <Input
-                    value={customDestination}
-                    onChange={(e) => setCustomDestination(e.target.value)}
-                    placeholder="Digite o nome/endereço do cliente de entrega..."
-                    required={!selectedRecipientId || selectedRecipientId === 'custom'}
-                    className="mt-1.5"
-                  />
-                )}
-
                 <div className="space-y-1.5 pt-1">
-                  <Label htmlFor="generalInvoices">Notas Fiscais desta entrega (separadas por vírgula)</Label>
+                  <Label htmlFor="generalInvoices">Notas Fiscais da entrega (separadas por vírgula)</Label>
                   <Input
                     id="generalInvoices"
                     value={generalInvoices}
@@ -566,74 +472,6 @@ export function NewTransportForm({
                   />
                 </div>
               </div>
-
-              {/* DESTINATÁRIOS ADICIONAIS (1 -> N) */}
-              {additionalRecipients.length > 0 && (
-                <div className="space-y-3 pt-3 border-t border-[#E7E5E4]">
-                  <p className="text-xs font-semibold text-[#1C1917]">
-                    Destinatários Adicionais da Mesma Carga ({additionalRecipients.length}):
-                  </p>
-
-                  {additionalRecipients.map((recipient, idx) => (
-                    <div
-                      key={recipient.id}
-                      className="p-3 bg-white rounded-[6px] border border-[#D6D3D1] space-y-2 relative"
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="text-[11px] font-mono font-bold text-[#0D9488]">
-                          Parada / Entrega #{idx + 2}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => removeRecipient(recipient.id)}
-                          className="text-red-500 hover:text-red-700 text-xs flex items-center gap-1"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" /> Remover Parada
-                        </button>
-                      </div>
-
-                      <div className="space-y-2">
-                        <select
-                          value={recipient.recipient_id || ''}
-                          onChange={(e) => handleSelectRecipientForStop(recipient.id, e.target.value)}
-                          className="flex h-9 w-full rounded-[6px] border border-[#D6D3D1] bg-[#FAFAF9] px-2 text-xs text-[#1C1917]"
-                        >
-                          <option value="">Selecione da lista de Destinatários ou digite...</option>
-                          {filteredRecipients.map((r) => (
-                            <option key={r.id} value={r.id}>
-                              {r.name} - {r.city}
-                            </option>
-                          ))}
-                          <option value="custom">Digitar Avulso</option>
-                        </select>
-
-                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
-                          <Input
-                            placeholder="Nome do Cliente"
-                            value={recipient.name}
-                            onChange={(e) => updateRecipient(recipient.id, 'name', e.target.value)}
-                            className="h-9 text-xs"
-                            required
-                          />
-                          <Input
-                            placeholder="Endereço / Município / Doca"
-                            value={recipient.destination}
-                            onChange={(e) => updateRecipient(recipient.id, 'destination', e.target.value)}
-                            className="h-9 text-xs"
-                            required
-                          />
-                          <Input
-                            placeholder="Notas Fiscais (ex: 5501, 5502)"
-                            value={recipient.invoices}
-                            onChange={(e) => updateRecipient(recipient.id, 'invoices', e.target.value)}
-                            className="h-9 text-xs"
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
             </div>
 
             <Button type="submit" className="w-full h-12 text-base font-semibold" disabled={isPending}>
