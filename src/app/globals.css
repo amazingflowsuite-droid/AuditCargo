@@ -52,3 +52,22 @@
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+@media print {
+  header, nav, .print:hidden, button {
+    display: none !important;
+  }
+  body, main {
+    background: white !important;
+    color: black !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+  .print-section {
+    box-shadow: none !important;
+    border: none !important;
+  }
+  .print-section input {
+    display: none !important;
+  }
+}

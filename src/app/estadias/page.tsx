@@ -43,7 +43,7 @@ export default async function EstadiasPage() {
             Apuração de Estadias
           </h1>
           <p className="text-sm text-[#57534E] mt-1">
-            Relatório analítico de tempo de espera (Demurrage) para negociação com remetentes.
+            Relatório analítico de tempo de espera.
           </p>
         </div>
       </div>

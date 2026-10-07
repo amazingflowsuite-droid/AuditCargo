@@ -3,17 +3,20 @@
 import { useState, useMemo } from 'react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
-import { Clock, AlertCircle, CheckCircle2, Building2, TimerReset } from "lucide-react"
+import { Button } from "@/components/ui/button"
+import { Clock, AlertCircle, CheckCircle2, Building2, TimerReset, Printer, Calendar } from "lucide-react"
 
 export function EstadiasReport({ trips }: { trips: any[] }) {
   const [filterSender, setFilterSender] = useState('')
+  const [filterDate, setFilterDate] = useState('')
 
   const processedTrips = useMemo(() => {
     return trips.map(t => {
       const start = new Date(t.arrival_time)
+      start.setSeconds(0, 0)
       const end = new Date(t.completion_time)
+      end.setSeconds(0, 0)
       const waitTimeMs = end.getTime() - start.getTime()
-      // Ignora os segundos, considerando apenas os minutos inteiros passados
       const waitTimeMinutes = Math.floor(waitTimeMs / (1000 * 60))
       const waitTimeHours = waitTimeMinutes / 60
       
@@ -40,9 +43,15 @@ export function EstadiasReport({ trips }: { trips: any[] }) {
           return false
         }
       }
+      if (filterDate) {
+        const tripDate = t.end.toISOString().split('T')[0]
+        if (tripDate !== filterDate) {
+          return false
+        }
+      }
       return true
     })
-  }, [processedTrips, filterSender])
+  }, [processedTrips, filterSender, filterDate])
 
   const totalFinished = filteredTrips.length
   const totalWithin = filteredTrips.filter(t => !t.isExcess).length
@@ -105,13 +114,13 @@ export function EstadiasReport({ trips }: { trips: any[] }) {
       </div>
 
       {/* Tabela */}
-      <Card className="shadow-sm">
-        <CardHeader className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#E7E5E4] pb-4">
+      <Card className="shadow-sm print-section">
+        <CardHeader className="flex flex-col xl:flex-row xl:items-center justify-between gap-4 border-b border-[#E7E5E4] pb-4">
           <div>
             <CardTitle className="text-lg">Detalhamento por Viagem</CardTitle>
             <CardDescription>Visualize o tempo de permanência de cada veículo no destino.</CardDescription>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2 print:hidden">
             <div className="relative w-full sm:w-64">
               <Building2 className="absolute left-2.5 top-2.5 h-4 w-4 text-[#A8A29E]" />
               <Input
@@ -121,6 +130,22 @@ export function EstadiasReport({ trips }: { trips: any[] }) {
                 className="pl-9 bg-[#FAFAF9]"
               />
             </div>
+            <div className="relative w-full sm:w-48">
+              <Input
+                type="date"
+                value={filterDate}
+                onChange={(e) => setFilterDate(e.target.value)}
+                className="bg-[#FAFAF9]"
+              />
+            </div>
+            <Button 
+              variant="outline" 
+              className="gap-2 w-full sm:w-auto"
+              onClick={() => window.print()}
+            >
+              <Printer className="w-4 h-4" />
+              Imprimir
+            </Button>
           </div>
         </CardHeader>
         <CardContent className="p-0">
@@ -128,7 +153,7 @@ export function EstadiasReport({ trips }: { trips: any[] }) {
             <table className="w-full text-sm text-left">
               <thead className="text-[11px] font-mono text-[#78716C] uppercase bg-[#F5F5F4] border-b border-[#E7E5E4]">
                 <tr>
-                  <th className="px-4 py-3 font-medium">Viagem / DACTE</th>
+                  <th className="px-4 py-3 font-medium">Viagem / Notas</th>
                   <th className="px-4 py-3 font-medium">Remetente (Pagador)</th>
                   <th className="px-4 py-3 font-medium">Chegada</th>
                   <th className="px-4 py-3 font-medium">Saída</th>
@@ -149,7 +174,12 @@ export function EstadiasReport({ trips }: { trips: any[] }) {
                   filteredTrips.map((t) => (
                     <tr key={t.id} className="hover:bg-[#F5F5F4]/50 transition-colors">
                       <td className="px-4 py-3">
-                        <div className="font-medium text-[#1C1917]">{t.cte_number || 'Sem Documento'}</div>
+                        <div className="font-medium text-[#1C1917]">
+                          {t.cte_number || 'S/ DACTE'} 
+                          {t.invoices && t.invoices.length > 0 && (
+                            <span className="text-[#0D9488] ml-1">({t.invoices.join(', ')})</span>
+                          )}
+                        </div>
                         <div className="text-xs text-[#78716C]">{t.drivers?.name}</div>
                       </td>
                       <td className="px-4 py-3">
