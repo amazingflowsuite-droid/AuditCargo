@@ -152,7 +152,7 @@ export async function sendTripWhatsAppPrompt(trip: {
             type: 'reply',
             reply: {
               id: `ARRIVED_${trip.id}`,
-              title: '📍 Cheguei na Portaria',
+              title: '📍 Cheguei',
             },
           },
           {
