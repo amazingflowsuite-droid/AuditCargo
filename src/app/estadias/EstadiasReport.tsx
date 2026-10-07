@@ -44,7 +44,11 @@ export function EstadiasReport({ trips }: { trips: any[] }) {
         }
       }
       if (filterDate) {
-        const tripDate = t.end.toISOString().split('T')[0]
+        // Convert the date to YYYY-MM-DD in the local timezone
+        const tripDate = new Date(t.end.getTime() - (t.end.getTimezoneOffset() * 60000))
+          .toISOString()
+          .split('T')[0]
+          
         if (tripDate !== filterDate) {
           return false
         }
@@ -130,13 +134,22 @@ export function EstadiasReport({ trips }: { trips: any[] }) {
                 className="pl-9 bg-[#FAFAF9]"
               />
             </div>
-            <div className="relative w-full sm:w-48">
+            <div className="relative w-full sm:w-56 group">
+              <Calendar className="absolute left-2.5 top-2.5 h-4 w-4 text-[#A8A29E] pointer-events-none" />
               <Input
                 type="date"
                 value={filterDate}
                 onChange={(e) => setFilterDate(e.target.value)}
-                className="bg-[#FAFAF9]"
+                className="pl-9 pr-14 bg-[#FAFAF9] text-[#57534E]"
               />
+              {filterDate && (
+                <button 
+                  onClick={() => setFilterDate('')}
+                  className="absolute right-2.5 top-2.5 text-[10px] uppercase font-bold text-[#EF4444] hover:text-[#B91C1C] transition-colors bg-red-50 px-2 py-0.5 rounded"
+                >
+                  Limpar
+                </button>
+              )}
             </div>
             <Button 
               variant="outline" 
