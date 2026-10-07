@@ -13,7 +13,9 @@ export function EstadiasReport({ trips }: { trips: any[] }) {
       const start = new Date(t.arrival_time)
       const end = new Date(t.completion_time)
       const waitTimeMs = end.getTime() - start.getTime()
-      const waitTimeHours = waitTimeMs / (1000 * 60 * 60)
+      // Ignora os segundos, considerando apenas os minutos inteiros passados
+      const waitTimeMinutes = Math.floor(waitTimeMs / (1000 * 60))
+      const waitTimeHours = waitTimeMinutes / 60
       
       const franchiseHours = t.senders?.franchise_hours || 0
       const excessHours = Math.max(0, waitTimeHours - franchiseHours)
