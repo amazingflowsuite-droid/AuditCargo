@@ -54,7 +54,7 @@
 }
 
 @media print {
-  header, nav, .print:hidden, button {
+  header, nav, [class*="print:hidden"], button {
     display: none !important;
   }
   body, main {

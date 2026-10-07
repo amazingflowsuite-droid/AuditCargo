@@ -19,8 +19,10 @@ import {
   Building2,
   MapPin,
   User,
+  Bot,
+  Loader2,
 } from 'lucide-react'
-import { updateTrip, cancelTrip, deleteTrip } from '@/app/actions'
+import { updateTrip, cancelTrip, deleteTrip, sendWhatsAppTripStatusPromptAction } from '@/app/actions'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -75,6 +77,30 @@ export function TripsDashboardTable({
 
   // Estado para Cancelamento / Exclusão
   const [actionTrip, setActionTrip] = useState<any | null>(null)
+
+  // Estado para Bot Meta WhatsApp
+  const [sendingBotTripId, setSendingBotTripId] = useState<string | null>(null)
+  const [botFeedback, setBotFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+
+  const handleSendBotPrompt = async (tripId: string) => {
+    setSendingBotTripId(tripId)
+    setBotFeedback(null)
+    try {
+      const res = await sendWhatsAppTripStatusPromptAction(tripId)
+      if (res.success) {
+        setBotFeedback({ type: 'success', message: res.message || 'Mensagem enviada com sucesso!' })
+      } else {
+        setBotFeedback({ type: 'error', message: res.error || 'Erro ao enviar mensagem via WhatsApp.' })
+      }
+    } catch (err: any) {
+      setBotFeedback({ type: 'error', message: err?.message || 'Erro inesperado na chamada.' })
+    } finally {
+      setSendingBotTripId(null)
+      setTimeout(() => {
+        setBotFeedback(null)
+      }, 7000)
+    }
+  }
 
   const openTripsCount = useMemo(() => {
     return trips.filter((t) => t.status !== 'finished' && t.status !== 'cancelled').length
@@ -338,6 +364,29 @@ export function TripsDashboardTable({
         </div>
       </div>
 
+      {/* Banner de Feedback do Bot WhatsApp */}
+      {botFeedback && (
+        <div
+          className={`p-3 rounded-[6px] text-xs font-mono flex items-center justify-between border animate-in fade-in duration-150 ${
+            botFeedback.type === 'success'
+              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+              : 'bg-amber-50 text-amber-800 border-amber-200'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            <Bot className="w-4 h-4 shrink-0 text-[#0D9488]" />
+            <span>{botFeedback.message}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setBotFeedback(null)}
+            className="text-stone-400 hover:text-stone-700 ml-3"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Conteúdo da Tabela */}
       {filteredTrips.length === 0 ? (
         <div className="text-center py-16 border-2 border-dashed border-[#D6D3D1] rounded-[8px] p-6 bg-[#F5F5F4]/40 space-y-3">
@@ -487,6 +536,23 @@ export function TripsDashboardTable({
                             >
                               <WhatsAppIcon className="w-4 h-4" />
                             </a>
+                          )}
+
+                          {/* Botão Disparar Bot Oficial Meta */}
+                          {trip.drivers?.phone && (
+                            <button
+                              type="button"
+                              disabled={sendingBotTripId === trip.id}
+                              onClick={() => handleSendBotPrompt(trip.id)}
+                              className="inline-flex items-center justify-center p-2 rounded-[6px] bg-[#0F172A]/5 text-[#0F172A] hover:bg-[#0F172A] hover:text-white transition-all shadow-2xs border border-[#E2E8F0] disabled:opacity-50"
+                              title="Disparar Cobrança de Status Automática via Bot Meta (WhatsApp)"
+                            >
+                              {sendingBotTripId === trip.id ? (
+                                <Loader2 className="w-4 h-4 animate-spin text-[#0D9488]" />
+                              ) : (
+                                <Bot className="w-4 h-4" />
+                              )}
+                            </button>
                           )}
 
                           {/* Link Motorista (Apenas Administrador) */}

@@ -7,6 +7,7 @@ import { revalidatePath } from 'next/cache'
 import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
 import { sendArrivalEmail, sendCompletionEmail } from '@/utils/mailer'
+import { sendTripWhatsAppPrompt } from '@/utils/whatsapp'
 
 // ==========================================
 // 🔐 AUTENTICAÇÃO E SESSÃO DO SISTEMA (SAAS)
@@ -771,9 +772,49 @@ export async function createTrip(payload: {
     return { error: error.message }
   }
 
+  // Disparo automático via WhatsApp (não-bloqueante)
+  try {
+    if (data?.drivers?.phone) {
+      sendTripWhatsAppPrompt(data).catch((err) =>
+        console.warn('⚠️ [WhatsApp] Aviso ao disparar mensagem inicial da viagem:', err)
+      )
+    }
+  } catch (waErr) {
+    console.warn('⚠️ [WhatsApp] Falha silenciosa no disparo WhatsApp da viagem:', waErr)
+  }
+
   revalidatePath('/')
   revalidatePath('/novo-transporte')
   return { success: true, data }
+}
+
+export async function sendWhatsAppTripStatusPromptAction(tripId: string) {
+  await requireAuth()
+  const supabase = await createClient()
+
+  const { data: trip, error } = await supabase
+    .from('trips')
+    .select(`
+      *,
+      drivers(name, phone)
+    `)
+    .eq('id', tripId)
+    .single()
+
+  if (error || !trip) {
+    return { success: false, error: 'Viagem não encontrada.' }
+  }
+
+  if (!trip.drivers?.phone) {
+    return { success: false, error: 'O motorista desta viagem não possui telefone cadastrado.' }
+  }
+
+  const result = await sendTripWhatsAppPrompt(trip)
+  if (!result.success) {
+    return { success: false, error: result.error || 'Erro ao enviar mensagem via WhatsApp Meta.' }
+  }
+
+  return { success: true, message: 'Mensagem de cobrança enviada com sucesso no WhatsApp do motorista!' }
 }
 
 export async function updateTrip(
