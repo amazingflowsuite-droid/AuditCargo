@@ -134,7 +134,22 @@ export async function sendTripTelegramPrompt(
 
   const replyMarkup: any = { inline_keyboard: [] }
 
-  if (trip.status === 'arrived' || trip.status === 'unloading') {
+  if (trip.status === 'finished') {
+    replyMarkup.inline_keyboard = [
+      [
+        {
+          text: '🔙 Desfazer Finalização (Rollback)',
+          callback_data: `ROLLBACK_FINISH_${trip.id}`,
+        },
+      ],
+      [
+        {
+          text: '📷 Enviar Canhoto / Foto',
+          callback_data: `REQ_PHOTO_${trip.id}`,
+        },
+      ],
+    ]
+  } else if (trip.status === 'arrived' || trip.status === 'unloading') {
     replyMarkup.inline_keyboard = [
       [
         {

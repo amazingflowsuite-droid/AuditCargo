@@ -78,6 +78,10 @@ export async function POST(request: NextRequest) {
         const tripId = data.replace('FINISH_DISCHARGE_', '')
         await answerTelegramCallbackQuery(callbackId, 'Finalizando descarga...')
         await handleFinishDischargeAction(tripId, fromChatId)
+      } else if (data.startsWith('ROLLBACK_FINISH_')) {
+        const tripId = data.replace('ROLLBACK_FINISH_', '')
+        await answerTelegramCallbackQuery(callbackId, 'Desfazendo finalização...')
+        await handleRollbackFinishAction(tripId, fromChatId)
       } else if (data.startsWith('TRANSIT_')) {
         await answerTelegramCallbackQuery(callbackId, 'Viagem em trânsito!')
         await sendTelegramTextMessage(
@@ -166,21 +170,22 @@ export async function POST(request: NextRequest) {
       const fileUrl = await getTelegramFileDirectUrl(fileId)
 
       if (fileUrl) {
-        const pool = getDbPool()
-        const updateRes = await pool.query(
-          `
-          UPDATE trips
-          SET checkin_photo_url = $1, delivery_receipt_url = $1
-          WHERE telegram_chat_id = $2 AND status != 'finished'
-          RETURNING *
-          `,
-          [fileUrl, String(chatId)]
-        )
+        const activeTrip = await findActiveTripByChatId(String(chatId))
 
-        if (updateRes.rows.length > 0) {
-          const trip = updateRes.rows[0]
+        if (activeTrip) {
+          const pool = getDbPool()
+          await pool.query(
+            `
+            UPDATE trips
+            SET checkin_photo_url = $1, delivery_receipt_url = $1
+            WHERE id = $2
+            `,
+            [fileUrl, activeTrip.id]
+          )
+
+          const trip = activeTrip
           
-          if (trip.status === 'in_progress' || trip.status === 'pending') {
+          if (trip.status === 'in_progress' || trip.status === 'pending' || trip.status === 'in_transit') {
             await sendTelegramTextMessage(
               chatId,
               `📸 <b>AuditCargo:</b> Foto recebida! Confirmando sua chegada automaticamente...`
@@ -456,7 +461,7 @@ async function handleRollbackAction(tripId: string, chatId: string | number) {
     const updateRes = await pool.query(
       `
       UPDATE trips
-      SET status = 'in_progress', arrival_time = NULL
+      SET status = 'in_transit', arrival_time = NULL
       WHERE id = $1 AND status = 'arrived'
       RETURNING *
       `,
@@ -485,6 +490,44 @@ async function handleRollbackAction(tripId: string, chatId: string | number) {
     })
   } catch (err) {
     console.error('❌ [Telegram Webhook] Erro ao desfazer chegada:', err)
+  }
+}
+
+async function handleRollbackFinishAction(tripId: string, chatId: string | number) {
+  const pool = getDbPool()
+  try {
+    const updateRes = await pool.query(
+      `
+      UPDATE trips
+      SET status = 'arrived', completion_time = NULL
+      WHERE id = $1 AND status = 'finished'
+      RETURNING *
+      `,
+      [tripId]
+    )
+
+    if (updateRes.rows.length === 0) {
+      await sendTelegramTextMessage(chatId, 'ℹ️ Não foi possível desfazer a finalização.')
+      return
+    }
+
+    const trip = updateRes.rows[0]
+    await sendTelegramTextMessage(chatId, '🔙 <b>Finalização desfeita!</b> A viagem voltou para o status "Chegou no Destino".')
+    
+    const driverInfo = await pool.query('SELECT name, phone FROM drivers WHERE id = $1', [trip.driver_id])
+    const driver = driverInfo.rows[0] || {}
+
+    await sendTripTelegramPrompt(chatId, {
+      id: trip.id,
+      token: trip.token,
+      destination: trip.destination,
+      status: trip.status,
+      cte_number: trip.cte_number,
+      service_type: trip.service_type,
+      drivers: { name: driver.name, phone: driver.phone },
+    })
+  } catch (err) {
+    console.error('❌ [Telegram Webhook] Erro ao desfazer finalização:', err)
   }
 }
 
