@@ -36,3 +36,7 @@ export function formatCEP(value: string): string {
 export function formatPlate(value: string): string {
   return value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 7)
 }
+
+// Validação RFC de formato de e-mail corporativo
+export const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+

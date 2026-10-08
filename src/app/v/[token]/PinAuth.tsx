@@ -5,11 +5,12 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { ShieldCheck, Lock } from "lucide-react"
+import { ShieldCheck, Lock, Eye, EyeOff, AlertCircle } from "lucide-react"
 import { verifyDriverPin } from "@/app/actions"
 
 export function PinAuth({ token, driverName }: { token: string; driverName: string }) {
   const [pin, setPin] = useState('')
+  const [showPin, setShowPin] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -20,6 +21,7 @@ export function PinAuth({ token, driverName }: { token: string; driverName: stri
     const res = await verifyDriverPin(token, pin)
     if (res.error) {
       setError(res.error)
+      setPin('')
       setLoading(false)
     }
     // if success, server action handles revalidation
@@ -47,17 +49,28 @@ export function PinAuth({ token, driverName }: { token: string; driverName: stri
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
             {error && (
-              <div className="p-3 bg-red-50 text-red-700 text-xs rounded-[6px] border border-red-200">
-                {error}
+              <div className="p-3 bg-red-50 text-red-700 text-xs rounded-[6px] border border-red-200 flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                <span>{error}</span>
               </div>
             )}
             <div className="space-y-2">
-              <Label htmlFor="pin" className="flex items-center gap-1.5">
-                <Lock className="w-4 h-4 text-[#0D9488]" /> PIN de 4 dígitos
-              </Label>
+              <div className="flex items-center justify-between">
+                <Label htmlFor="pin" className="flex items-center gap-1.5 text-xs font-semibold text-[#1C1917]">
+                  <Lock className="w-4 h-4 text-[#0D9488]" /> PIN de 4 dígitos
+                </Label>
+                <button
+                  type="button"
+                  onClick={() => setShowPin(!showPin)}
+                  className="text-[11px] text-[#78716C] hover:text-[#0D9488] flex items-center gap-1 font-medium transition-colors"
+                >
+                  {showPin ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  <span>{showPin ? 'Ocultar' : 'Exibir'}</span>
+                </button>
+              </div>
               <Input
                 id="pin"
-                type="password"
+                type={showPin ? 'text' : 'password'}
                 inputMode="numeric"
                 maxLength={4}
                 value={pin}
@@ -67,7 +80,7 @@ export function PinAuth({ token, driverName }: { token: string; driverName: stri
                 required
               />
             </div>
-            <Button type="submit" className="w-full h-12 text-base" disabled={loading || pin.length !== 4}>
+            <Button type="submit" className="w-full h-12 text-base bg-[#0D9488] hover:bg-[#0F766E]" disabled={loading || pin.length !== 4}>
               {loading ? 'Verificando...' : 'Acessar Viagem'}
             </Button>
           </form>

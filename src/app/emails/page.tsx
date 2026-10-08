@@ -3,10 +3,8 @@ import { requireAuth } from "@/utils/supabase/auth"
 import { EmailManager } from "./EmailManager"
 
 export default async function EmailsPage() {
-  const [currentUser, emails] = await Promise.all([
-    requireAuth(),
-    getNotificationEmails(),
-  ])
+  const currentUser = await requireAuth()
+  const emails = await getNotificationEmails(currentUser.organization_id)
 
   return (
     <div className="space-y-8">

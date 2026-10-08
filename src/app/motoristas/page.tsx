@@ -3,10 +3,10 @@ import { requireAuth } from "@/utils/supabase/auth"
 import { DriverManager } from "./DriverManager"
 
 export default async function MotoristasPage() {
-  const [currentUser, drivers, companies] = await Promise.all([
-    requireAuth(),
-    getDrivers(),
-    getCompanies(),
+  const currentUser = await requireAuth()
+  const [drivers, companies] = await Promise.all([
+    getDrivers(currentUser.organization_id),
+    getCompanies(currentUser.organization_id),
   ])
 
   return (

@@ -1,11 +1,14 @@
+import { requireAuth } from "@/utils/supabase/auth"
 import { getCompanies, getBranches, getDrivers } from "../actions"
 import { NewTripForm } from "./NewTripForm"
 
 export default async function NovoDespachoPage() {
+  const currentUser = await requireAuth()
+
   const [companies, branches, drivers] = await Promise.all([
-    getCompanies(),
-    getBranches(),
-    getDrivers(),
+    getCompanies(currentUser.organization_id),
+    getBranches(currentUser.organization_id),
+    getDrivers(currentUser.organization_id),
   ])
 
   return (

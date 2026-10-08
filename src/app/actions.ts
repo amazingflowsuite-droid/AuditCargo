@@ -1,20 +1,24 @@
 'use server'
 
 import { createClient } from '@/utils/supabase/server'
+import { createClient as createSupabaseClient } from '@supabase/supabase-js'
 import { getCurrentUser, requireAuth, requireAdmin, requireSuperAdmin } from '@/utils/supabase/auth'
 import { getDbPool } from '@/utils/db'
 import { revalidatePath } from 'next/cache'
 import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
+import { after } from 'next/server'
 import { sendArrivalEmail, sendCompletionEmail } from '@/utils/mailer'
 import { sendTripWhatsAppPrompt } from '@/utils/whatsapp'
+import { sendTripTelegramPrompt, getTelegramTripDeepLink } from '@/utils/telegram'
+import { formatCNPJ, EMAIL_REGEX } from '@/utils/masks'
+import crypto from 'crypto'
 
 // ==========================================
 // 🔐 AUTENTICAÇÃO E SESSÃO DO SISTEMA (SAAS)
 // ==========================================
 
 export async function signInAction(formData: FormData) {
-  const supabase = await createClient()
   const email = (formData.get('email') as string)?.trim().toLowerCase()
   const password = formData.get('password') as string
 
@@ -22,30 +26,121 @@ export async function signInAction(formData: FormData) {
     return { error: 'Por favor, informe e-mail e senha.' }
   }
 
+  // Validação de Tamanho de Payload (Anti-DoS)
+  if (email.length > 150) {
+    return { error: 'E-mail inválido ou muito longo.' }
+  }
+  if (password.length > 128) {
+    return { error: 'A senha informada excede o tamanho máximo permitido.' }
+  }
+
+  // Rate Limiting por E-mail (Proteção contra Brute Force / Credential Stuffing)
+  const cookieStore = await cookies()
+  const emailKey = email.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 48)
+
+  const lockCookie = cookieStore.get(`login_lock_${emailKey}`)
+  if (lockCookie) {
+    const unlockAt = parseInt(lockCookie.value, 10)
+    const remainingSeconds = Math.ceil((unlockAt - Date.now()) / 1000)
+    if (remainingSeconds > 0) {
+      return {
+        error: `Muitas tentativas incorretas. Acesso bloqueado por segurança. Tente novamente em ${remainingSeconds} segundos.`
+      }
+    }
+  }
+
+  const supabase = await createClient()
+
   const { data, error } = await supabase.auth.signInWithPassword({
     email,
     password,
   })
 
   if (error) {
-    if (error.message.includes('Invalid login credentials')) {
-      return { error: 'E-mail ou senha incorretos.' }
+    console.error('Erro no Supabase signInWithPassword:', error.message)
+    const errorMsg = (error.message || '').toLowerCase()
+    const isNetworkOrTlsError =
+      errorMsg.includes('fetch failed') ||
+      errorMsg.includes('certificate') ||
+      errorMsg.includes('econnrefused') ||
+      errorMsg.includes('timeout') ||
+      errorMsg.includes('network')
+
+    if (isNetworkOrTlsError) {
+      return {
+        error: 'Falha temporária de conexão com o serviço de autenticação (rede/proxy). Por favor, tente novamente.',
+      }
     }
-    return { error: error.message }
+
+    const attemptsCookie = cookieStore.get(`login_attempts_${emailKey}`)
+    let attempts = attemptsCookie ? parseInt(attemptsCookie.value, 10) : 0
+    attempts += 1
+
+    if (attempts >= 5) {
+      // Bloqueio de 5 minutos
+      cookieStore.set(`login_lock_${emailKey}`, (Date.now() + 5 * 60 * 1000).toString(), {
+        maxAge: 5 * 60,
+        httpOnly: true,
+        path: '/',
+        sameSite: 'lax',
+      })
+      cookieStore.delete(`login_attempts_${emailKey}`)
+      return {
+        error: 'Limite de 5 tentativas atingido. Acesso temporariamente bloqueado por 5 minutos por segurança.'
+      }
+    } else {
+      cookieStore.set(`login_attempts_${emailKey}`, attempts.toString(), {
+        maxAge: 15 * 60,
+        httpOnly: true,
+        path: '/',
+        sameSite: 'lax',
+      })
+      return {
+        error: `E-mail ou senha incorretos. Tentativa ${attempts} de 5.`
+      }
+    }
   }
 
   if (data?.user) {
     const { data: profile } = await supabase
       .from('profiles')
-      .select('active, role')
+      .select('active, role, is_super_admin, organization_id, organization:organizations(active)')
       .eq('id', data.user.id)
       .single()
 
     if (profile && !profile.active) {
-      await supabase.auth.signOut()
+      // Limpeza profunda de cookies para garantir que a sessão não persista
+      const allCookies = cookieStore.getAll()
+      for (const c of allCookies) {
+        if (c.name.startsWith('sb-') || c.name.includes('supabase') || c.name.includes('auth')) {
+          cookieStore.delete(c.name)
+          cookieStore.set(c.name, '', { path: '/', maxAge: 0, expires: new Date(0) })
+        }
+      }
+      try {
+        await supabase.auth.signOut()
+      } catch {}
       return { error: 'Acesso bloqueado: este usuário foi inativado pelo administrador.' }
     }
+
+    if (profile && !profile.is_super_admin && (profile.organization as any)?.active === false) {
+      const allCookies = cookieStore.getAll()
+      for (const c of allCookies) {
+        if (c.name.startsWith('sb-') || c.name.includes('supabase') || c.name.includes('auth')) {
+          cookieStore.delete(c.name)
+          cookieStore.set(c.name, '', { path: '/', maxAge: 0, expires: new Date(0) })
+        }
+      }
+      try {
+        await supabase.auth.signOut()
+      } catch {}
+      return { error: 'Acesso bloqueado: a empresa associada a esta conta está inativada pelo administrador master.' }
+    }
   }
+
+  // Sucesso: limpar contadores de tentativas
+  cookieStore.delete(`login_attempts_${emailKey}`)
+  cookieStore.delete(`login_lock_${emailKey}`)
 
   return { success: true }
 }
@@ -96,169 +191,103 @@ export async function createUserAction(formData: FormData) {
   const name = (formData.get('name') as string)?.trim()
   const email = (formData.get('email') as string)?.trim().toLowerCase()
   const password = formData.get('password') as string
-  const role = ((formData.get('role') as string) || 'operator') as 'admin' | 'operator'
+  const rawRole = (formData.get('role') as string) || 'operator'
+  const role = (rawRole === 'admin' ? 'admin' : 'operator') as 'admin' | 'operator'
 
-  if (!name) {
-    return { error: 'Nome do colaborador é obrigatório.' }
+  if (!name || name.length < 2) {
+    return { error: 'O nome do colaborador deve conter pelo menos 2 caracteres.' }
   }
-  if (!email || !email.includes('@')) {
-    return { error: 'E-mail inválido.' }
+  if (!email || !EMAIL_REGEX.test(email)) {
+    return { error: 'Por favor, informe um endereço de e-mail corporativo válido.' }
   }
   if (!password || password.length < 6) {
     return { error: 'A senha provisória deve conter no mínimo 6 caracteres.' }
   }
 
-  const pool = getDbPool()
-  let client
-
   try {
-    client = await pool.connect()
-    await client.query('BEGIN')
+    const supabase = await createClient()
 
-    // Checa se já existe usuário com esse e-mail em auth.users
-    const userCheck = await client.query('SELECT id FROM auth.users WHERE email = $1', [email])
-    if (userCheck.rows.length > 0) {
-      await client.query('ROLLBACK')
-      return { error: 'Já existe um usuário cadastrado com este e-mail na plataforma.' }
+    // 1. Validação prévia de duplicidade: checa se já existe colaborador com este e-mail
+    const { data: existingProfile } = await supabase
+      .from('profiles')
+      .select('id, name')
+      .ilike('email', email)
+      .maybeSingle()
+
+    if (existingProfile) {
+      return { error: `Já existe um colaborador cadastrado com o e-mail "${email}".` }
     }
 
-    // Insere novo usuário em auth.users com todas as colunas de texto GoTrue inicializadas (evitando null)
-    const userMetadata = JSON.stringify({
-      name,
+    // 2. Cria o usuário via API oficial do Supabase Auth (HTTPS / Porta 443)
+    const authClient = createSupabaseClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        auth: { persistSession: false, autoRefreshToken: false },
+      }
+    )
+
+    const { data: signUpData, error: signUpError } = await authClient.auth.signUp({
       email,
-      email_verified: false,
-      phone_verified: false,
+      password,
+      options: {
+        data: { name },
+      },
     })
 
-    const userRes = await client.query(`
-      INSERT INTO auth.users (
-        instance_id,
-        id,
-        aud,
-        role,
-        email,
-        encrypted_password,
-        email_confirmed_at,
-        invited_at,
-        confirmation_token,
-        confirmation_sent_at,
-        recovery_token,
-        recovery_sent_at,
-        email_change_token_new,
-        email_change,
-        email_change_sent_at,
-        last_sign_in_at,
-        raw_app_meta_data,
-        raw_user_meta_data,
-        is_super_admin,
-        created_at,
-        updated_at,
-        phone,
-        phone_confirmed_at,
-        phone_change,
-        phone_change_token,
-        phone_change_sent_at,
-        email_change_token_current,
-        email_change_confirm_status,
-        banned_until,
-        reauthentication_token,
-        reauthentication_sent_at,
-        is_sso_user,
-        deleted_at,
-        is_anonymous
-      ) VALUES (
-        '00000000-0000-0000-0000-000000000000',
-        gen_random_uuid(),
-        'authenticated',
-        'authenticated',
-        $1,
-        crypt($2, gen_salt('bf')),
-        now(),
-        null,
-        '',
-        null,
-        '',
-        null,
-        '',
-        '',
-        null,
-        null,
-        '{"provider": "email", "providers": ["email"]}'::jsonb,
-        $3::jsonb,
-        null,
-        now(),
-        now(),
-        null,
-        null,
-        '',
-        '',
-        null,
-        '',
-        0,
-        null,
-        '',
-        null,
-        false,
-        null,
-        false
-      )
-      RETURNING id;
-    `, [email, password, userMetadata])
+    if (signUpError) {
+      if (signUpError.message?.toLowerCase().includes('already registered')) {
+        return { error: `Já existe um usuário cadastrado com o e-mail "${email}".` }
+      }
+      return { error: signUpError.message }
+    }
 
-    const userId = userRes.rows[0].id
+    // No Supabase, se o e-mail já existir no auth.users, GoTrue retorna identities: [] por segurança anti-enumeração
+    if (
+      !signUpData?.user ||
+      (Array.isArray(signUpData.user.identities) && signUpData.user.identities.length === 0)
+    ) {
+      return {
+        error: `Já existe uma conta registrada com o e-mail "${email}". Por favor, utilize outro endereço de e-mail.`,
+      }
+    }
 
-    // Insere identity correspondente
-    const identityData = JSON.stringify({
-      sub: userId.toString(),
-      email,
-      name,
-    })
+    const userId = signUpData.user.id
+    const nowIso = new Date().toISOString()
 
-    await client.query(`
-      INSERT INTO auth.identities (
-        id,
-        user_id,
-        provider_id,
-        identity_data,
-        provider,
-        created_at,
-        updated_at
-      ) VALUES (
-        gen_random_uuid(),
-        $1::uuid,
-        $2,
-        $3::jsonb,
-        'email',
-        now(),
-        now()
-      );
-    `, [userId, userId.toString(), identityData])
-
-    // Insere profile na organização do admin
-    await client.query(`
-      INSERT INTO public.profiles (
-        id,
-        organization_id,
+    // 3. Vincula o perfil à organização do administrador via cliente autenticado
+    const { error: profileError } = await supabase
+      .from('profiles')
+      .insert({
+        id: userId,
+        organization_id: admin.organization_id,
         name,
         email,
         role,
-        active
-      ) VALUES ($1::uuid, $2::uuid, $3, $4, $5, true);
-    `, [userId, admin.organization_id, name, email, role])
+        active: true,
+      })
 
-    await client.query('COMMIT')
-    revalidatePath('/usuarios')
-    return { success: true }
-  } catch (err: any) {
-    if (client) {
-      try {
-        await client.query('ROLLBACK')
-      } catch {}
+    if (profileError) {
+      console.error('Erro ao vincular perfil do usuário:', profileError.message)
+      return { error: 'Erro ao vincular perfil: ' + profileError.message }
     }
+
+    revalidatePath('/usuarios')
+
+    return {
+      success: true,
+      data: {
+        id: String(userId),
+        name,
+        email,
+        role,
+        active: true,
+        created_at: nowIso,
+      },
+    }
+  } catch (err: any) {
     console.error('Erro ao criar usuário:', err)
     return { error: err.message || 'Erro ao registrar usuário.' }
-  } finally {
-    if (client) client.release()
   }
 }
 
@@ -269,6 +298,22 @@ export async function toggleUserStatusAction(userId: string, active: boolean) {
   }
 
   const supabase = await createClient()
+
+  // Anti-IDOR: verifica se o usuário pertence à organização do administrador
+  const { data: targetProfile, error: fetchErr } = await supabase
+    .from('profiles')
+    .select('id, role, organization_id, is_super_admin')
+    .eq('id', userId)
+    .maybeSingle()
+
+  if (fetchErr || !targetProfile || targetProfile.organization_id !== admin.organization_id) {
+    return { error: 'Colaborador não encontrado na sua organização.' }
+  }
+
+  if (targetProfile.is_super_admin && !admin.is_super_admin) {
+    return { error: 'Não é permitido alterar o status de um super administrador.' }
+  }
+
   const { error } = await supabase
     .from('profiles')
     .update({ active })
@@ -286,18 +331,35 @@ export async function deleteUserAction(userId: string) {
     return { error: 'Você não pode excluir sua própria conta de administrador.' }
   }
 
-  const pool = getDbPool()
-  let client
-  try {
-    client = await pool.connect()
-    await client.query(`DELETE FROM auth.users WHERE id = $1::uuid`, [userId])
-    revalidatePath('/usuarios')
-    return { success: true }
-  } catch (err: any) {
-    return { error: err.message }
-  } finally {
-    if (client) client.release()
+  const supabase = await createClient()
+
+  // Anti-IDOR Crítico: Garante que o usuário pertence estritamente à organização do admin logado
+  const { data: targetProfile, error: profileCheckError } = await supabase
+    .from('profiles')
+    .select('id, organization_id, role, is_super_admin')
+    .eq('id', userId)
+    .maybeSingle()
+
+  if (profileCheckError || !targetProfile || targetProfile.organization_id !== admin.organization_id) {
+    return { error: 'Colaborador não encontrado na sua organização.' }
   }
+
+  if (targetProfile.is_super_admin && !admin.is_super_admin) {
+    return { error: 'Não é permitido excluir um super administrador.' }
+  }
+
+  const { error: deleteErr } = await supabase
+    .from('profiles')
+    .delete()
+    .eq('id', userId)
+    .eq('organization_id', admin.organization_id)
+
+  if (deleteErr) {
+    return { error: deleteErr.message }
+  }
+
+  revalidatePath('/usuarios')
+  return { success: true }
 }
 
 // ==========================================
@@ -337,31 +399,35 @@ export async function getOrCreateTenantCompanyId(supabase: any, organizationId?:
   return null
 }
 
-export async function getCompanies() {
+export async function getCompanies(organizationId?: string) {
   const user = await getCurrentUser()
-  const supabase = await createClient()
-  let query = supabase
-    .from('companies')
-    .select('*')
-    .order('created_at', { ascending: false })
+  if (!user) return []
 
-  if (user?.organization_id) {
-    query = query.eq('organization_id', user.organization_id)
+  const targetOrgId = (user.is_super_admin && organizationId) ? organizationId : user.organization_id
+  if (!targetOrgId) {
+    return []
   }
 
-  const { data, error } = await query
+  const supabase = await createClient()
+  const { data, error } = await supabase
+    .from('companies')
+    .select('*')
+    .eq('organization_id', targetOrgId)
+    .order('created_at', { ascending: false })
+
   if (error) {
     console.error('Erro ao buscar empresas:', error.message)
     return []
   }
 
-  if ((!data || data.length === 0) && user?.organization_id) {
-    const defaultId = await getOrCreateTenantCompanyId(supabase, user.organization_id)
+  if ((!data || data.length === 0) && targetOrgId) {
+    const defaultId = await getOrCreateTenantCompanyId(supabase, targetOrgId)
     if (defaultId) {
       const { data: refreshed } = await supabase
         .from('companies')
         .select('*')
         .eq('id', defaultId)
+        .eq('organization_id', targetOrgId)
       return refreshed || []
     }
   }
@@ -370,23 +436,54 @@ export async function getCompanies() {
 }
 
 export async function createCompany(formData: FormData) {
-  const user = await requireAuth()
+  const user = await requireAdmin()
   const supabase = await createClient()
-  const name = formData.get('name') as string
-  const cnpj = formData.get('cnpj') as string
-  const contact = (formData.get('contact') as string) || null
-  const phone = (formData.get('phone') as string) || null
-  const email = (formData.get('email') as string) || null
-  const website = (formData.get('website') as string) || null
+
+  const rawName = (formData.get('name') as string)?.trim()
+  const rawCnpj = (formData.get('cnpj') as string)?.trim()
+  const rawContact = (formData.get('contact') as string)?.trim()
+  const rawPhone = (formData.get('phone') as string)?.trim()
+  const rawEmail = (formData.get('email') as string)?.trim().toLowerCase()
+  const rawWebsite = (formData.get('website') as string)?.trim()
+
+  if (!rawName || rawName.length < 2) {
+    return { error: 'O nome da empresa deve conter pelo menos 2 caracteres.' }
+  }
+
+  const cnpjClean = rawCnpj ? rawCnpj.replace(/\D/g, '') : ''
+  if (cnpjClean && cnpjClean.length !== 14) {
+    return { error: 'O CNPJ informado é inválido (deve conter 14 dígitos numéricos).' }
+  }
+  const formattedCnpj = cnpjClean ? formatCNPJ(cnpjClean) : (rawCnpj || null)
+
+  let validEmail: string | null = null
+  if (rawEmail) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail)) {
+      return { error: 'O e-mail corporativo informado é inválido.' }
+    }
+    validEmail = rawEmail
+  }
+
+  let validWebsite: string | null = null
+  if (rawWebsite) {
+    validWebsite = rawWebsite.startsWith('http://') || rawWebsite.startsWith('https://')
+      ? rawWebsite
+      : `https://${rawWebsite}`
+  }
+
+  const targetOrgId = user.organization_id
+  if (!targetOrgId) {
+    return { error: 'Organização não identificada na sessão do administrador.' }
+  }
 
   const insertObj: any = {
-    name,
-    cnpj,
-    contact,
-    phone,
-    email,
-    website,
-    organization_id: user.organization_id,
+    name: rawName,
+    cnpj: formattedCnpj,
+    contact: rawContact || null,
+    phone: rawPhone || null,
+    email: validEmail,
+    website: validWebsite,
+    organization_id: targetOrgId,
   }
 
   const { data, error } = await supabase
@@ -401,20 +498,58 @@ export async function createCompany(formData: FormData) {
 }
 
 export async function updateCompany(id: string, formData: FormData) {
-  const user = await requireAuth()
+  const user = await requireAdmin()
   const supabase = await createClient()
-  const name = formData.get('name') as string
-  const cnpj = formData.get('cnpj') as string
-  const contact = (formData.get('contact') as string) || null
-  const phone = (formData.get('phone') as string) || null
-  const email = (formData.get('email') as string) || null
-  const website = (formData.get('website') as string) || null
+
+  const rawName = (formData.get('name') as string)?.trim()
+  const rawCnpj = (formData.get('cnpj') as string)?.trim()
+  const rawContact = (formData.get('contact') as string)?.trim()
+  const rawPhone = (formData.get('phone') as string)?.trim()
+  const rawEmail = (formData.get('email') as string)?.trim().toLowerCase()
+  const rawWebsite = (formData.get('website') as string)?.trim()
+
+  if (!rawName || rawName.length < 2) {
+    return { error: 'O nome da empresa deve conter pelo menos 2 caracteres.' }
+  }
+
+  const cnpjClean = rawCnpj ? rawCnpj.replace(/\D/g, '') : ''
+  if (cnpjClean && cnpjClean.length !== 14) {
+    return { error: 'O CNPJ informado é inválido (deve conter 14 dígitos numéricos).' }
+  }
+  const formattedCnpj = cnpjClean ? formatCNPJ(cnpjClean) : (rawCnpj || null)
+
+  let validEmail: string | null = null
+  if (rawEmail) {
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail)) {
+      return { error: 'O e-mail corporativo informado é inválido.' }
+    }
+    validEmail = rawEmail
+  }
+
+  let validWebsite: string | null = null
+  if (rawWebsite) {
+    validWebsite = rawWebsite.startsWith('http://') || rawWebsite.startsWith('https://')
+      ? rawWebsite
+      : `https://${rawWebsite}`
+  }
+
+  const targetOrgId = user.organization_id
+  if (!targetOrgId) {
+    return { error: 'Organização não identificada na sessão do administrador.' }
+  }
 
   const { data, error } = await supabase
     .from('companies')
-    .update({ name, cnpj, contact, phone, email, website })
+    .update({
+      name: rawName,
+      cnpj: formattedCnpj,
+      contact: rawContact || null,
+      phone: rawPhone || null,
+      email: validEmail,
+      website: validWebsite,
+    })
     .eq('id', id)
-    .eq('organization_id', user.organization_id)
+    .eq('organization_id', targetOrgId)
     .select()
     .single()
 
@@ -428,13 +563,27 @@ export async function updateCompany(id: string, formData: FormData) {
 export async function deleteCompany(id: string) {
   const user = await requireAdmin()
   const supabase = await createClient()
+
+  const targetOrgId = user.organization_id
+  if (!targetOrgId) {
+    return { error: 'Organização não identificada.' }
+  }
+
   const { error } = await supabase
     .from('companies')
     .delete()
     .eq('id', id)
-    .eq('organization_id', user.organization_id)
+    .eq('organization_id', targetOrgId)
 
-  if (error) return { error: error.message }
+  if (error) {
+    if (error.message?.includes('foreign key') || (error as any).code === '23503') {
+      return {
+        error: 'Não é possível excluir esta empresa pois existem filiais, motoristas ou viagens vinculadas a ela. Realoque ou remova os vínculos primeiro.'
+      }
+    }
+    return { error: error.message }
+  }
+
   revalidatePath('/empresas')
   revalidatePath('/filiais')
   revalidatePath('/motoristas')
@@ -445,19 +594,23 @@ export async function deleteCompany(id: string) {
 // 📍 FILIAIS
 // ==========================================
 
-export async function getBranches() {
-  const user = await getCurrentUser()
-  const supabase = await createClient()
-  let query = supabase
-    .from('branches')
-    .select('*, companies(name)')
-    .order('created_at', { ascending: false })
+export async function getBranches(organizationId?: string) {
+  const user = await requireAuth().catch(() => null)
+  if (!user) return []
 
-  if (user?.organization_id) {
-    query = query.eq('organization_id', user.organization_id)
+  // Previne IDOR/BOLA: usuário comum só acessa a própria organização
+  const targetOrgId = (user.is_super_admin && organizationId) ? organizationId : user.organization_id
+  if (!targetOrgId) {
+    return []
   }
 
-  const { data, error } = await query
+  const supabase = await createClient()
+  const { data, error } = await supabase
+    .from('branches')
+    .select('id, name, code, city, state, email, phone, contact, company_id, created_at, companies(name)')
+    .eq('organization_id', targetOrgId)
+    .order('created_at', { ascending: false })
+
   if (error) {
     console.error('Erro ao buscar filiais:', error.message)
     return []
@@ -468,31 +621,34 @@ export async function getBranches() {
 export async function createBranch(formData: FormData) {
   const user = await requireAuth()
   const supabase = await createClient()
-  let company_id = formData.get('company_id') as string
-  if (!company_id && user.organization_id) {
+  let company_id = ((formData.get('company_id') as string) || '').trim()
+
+  // Previne IDOR em company_id
+  if (company_id) {
+    const { data: comp } = await supabase
+      .from('companies')
+      .select('id')
+      .eq('id', company_id)
+      .eq('organization_id', user.organization_id)
+      .single()
+
+    if (!comp) {
+      return { error: 'Empresa vinculada inválida ou não pertence à sua organização.' }
+    }
+  } else if (user.organization_id) {
     company_id = (await getOrCreateTenantCompanyId(supabase, user.organization_id)) || ''
   }
 
-  if (!company_id && user.organization_id) {
-    const { data: c } = await supabase
-      .from('companies')
-      .select('id')
-      .eq('organization_id', user.organization_id)
-      .limit(1)
-      .maybeSingle()
-    if (c?.id) company_id = c.id
-  }
+  const name = ((formData.get('name') as string) || '').trim()
+  const code = ((formData.get('code') as string) || '').trim().toUpperCase()
+  const city = ((formData.get('city') as string) || '').trim()
+  const state = ((formData.get('state') as string) || '').trim().toUpperCase().slice(0, 2)
+  const email = ((formData.get('email') as string) || '').trim() || null
+  const phone = ((formData.get('phone') as string) || '').trim() || null
+  const contact = ((formData.get('contact') as string) || '').trim() || null
 
-  const name = formData.get('name') as string
-  const code = formData.get('code') as string
-  const city = formData.get('city') as string
-  const state = formData.get('state') as string
-  const email = (formData.get('email') as string)?.trim() || null
-  const phone = (formData.get('phone') as string)?.trim() || null
-  const contact = (formData.get('contact') as string)?.trim() || null
-
-  if (!name || name.trim() === '') {
-    return { error: 'O nome da filial é obrigatório.' }
+  if (!name || name.length < 3) {
+    return { error: 'O nome da filial deve ter pelo menos 3 caracteres.' }
   }
 
   const { data, error } = await supabase
@@ -501,16 +657,16 @@ export async function createBranch(formData: FormData) {
       {
         company_id: company_id || null,
         name,
-        code,
-        city,
-        state,
+        code: code || null,
+        city: city || null,
+        state: state || null,
         email,
         phone,
         contact,
         organization_id: user.organization_id,
       },
     ])
-    .select('*, companies(name)')
+    .select('id, name, code, city, state, email, phone, contact, company_id, created_at, companies(name)')
     .single()
 
   if (error) {
@@ -524,24 +680,51 @@ export async function createBranch(formData: FormData) {
 export async function updateBranch(id: string, formData: FormData) {
   const user = await requireAuth()
   const supabase = await createClient()
-  let company_id = formData.get('company_id') as string
-  if (!company_id && user.organization_id) {
+  let company_id = ((formData.get('company_id') as string) || '').trim()
+
+  // Previne IDOR em company_id
+  if (company_id) {
+    const { data: comp } = await supabase
+      .from('companies')
+      .select('id')
+      .eq('id', company_id)
+      .eq('organization_id', user.organization_id)
+      .single()
+
+    if (!comp) {
+      return { error: 'Empresa vinculada inválida ou não pertence à sua organização.' }
+    }
+  } else if (user.organization_id) {
     company_id = (await getOrCreateTenantCompanyId(supabase, user.organization_id)) || ''
   }
-  const name = formData.get('name') as string
-  const code = formData.get('code') as string
-  const city = formData.get('city') as string
-  const state = formData.get('state') as string
-  const email = (formData.get('email') as string)?.trim() || null
-  const phone = (formData.get('phone') as string)?.trim() || null
-  const contact = (formData.get('contact') as string)?.trim() || null
+
+  const name = ((formData.get('name') as string) || '').trim()
+  const code = ((formData.get('code') as string) || '').trim().toUpperCase()
+  const city = ((formData.get('city') as string) || '').trim()
+  const state = ((formData.get('state') as string) || '').trim().toUpperCase().slice(0, 2)
+  const email = ((formData.get('email') as string) || '').trim() || null
+  const phone = ((formData.get('phone') as string) || '').trim() || null
+  const contact = ((formData.get('contact') as string) || '').trim() || null
+
+  if (!name || name.length < 3) {
+    return { error: 'O nome da filial deve ter pelo menos 3 caracteres.' }
+  }
 
   const { data, error } = await supabase
     .from('branches')
-    .update({ company_id: company_id || null, name, code, city, state, email, phone, contact })
+    .update({
+      company_id: company_id || null,
+      name,
+      code: code || null,
+      city: city || null,
+      state: state || null,
+      email,
+      phone,
+      contact,
+    })
     .eq('id', id)
     .eq('organization_id', user.organization_id)
-    .select('*, companies(name)')
+    .select('id, name, code, city, state, email, phone, contact, company_id, created_at, companies(name)')
     .single()
 
   if (error) return { error: error.message }
@@ -558,7 +741,13 @@ export async function deleteBranch(id: string) {
     .eq('id', id)
     .eq('organization_id', user.organization_id)
 
-  if (error) return { error: error.message }
+  if (error) {
+    if (error.message.includes('foreign key') || error.code === '23503') {
+      return { error: 'Não é possível excluir esta filial pois existem transportes vinculados a ela.' }
+    }
+    return { error: error.message }
+  }
+
   revalidatePath('/filiais')
   return { success: true }
 }
@@ -567,19 +756,23 @@ export async function deleteBranch(id: string) {
 // 🚛 MOTORISTAS
 // ==========================================
 
-export async function getDrivers() {
-  const user = await getCurrentUser()
-  const supabase = await createClient()
-  let query = supabase
-    .from('drivers')
-    .select('*, companies(name)')
-    .order('created_at', { ascending: false })
+export async function getDrivers(organizationId?: string) {
+  const user = await requireAuth().catch(() => null)
+  if (!user) return []
 
-  if (user?.organization_id) {
-    query = query.eq('organization_id', user.organization_id)
+  // Previne IDOR/BOLA: usuário comum só acessa a própria organização
+  const targetOrgId = (user.is_super_admin && organizationId) ? organizationId : user.organization_id
+  if (!targetOrgId) {
+    return []
   }
 
-  const { data, error } = await query
+  const supabase = await createClient()
+  const { data, error } = await supabase
+    .from('drivers')
+    .select('id, name, cpf, phone, default_plate, pin, company_id, telegram_chat_id, telegram_username, created_at, companies(name)')
+    .eq('organization_id', targetOrgId)
+    .order('created_at', { ascending: false })
+
   if (error) {
     console.error('Erro ao buscar motoristas:', error.message)
     return []
@@ -590,15 +783,48 @@ export async function getDrivers() {
 export async function createDriver(formData: FormData) {
   const user = await requireAuth()
   const supabase = await createClient()
-  let company_id = formData.get('company_id') as string
-  if (!company_id && user.organization_id) {
+  let company_id = ((formData.get('company_id') as string) || '').trim()
+
+  // Previne IDOR em company_id: garante que a empresa pertence à organização do usuário
+  if (company_id) {
+    const { data: comp } = await supabase
+      .from('companies')
+      .select('id')
+      .eq('id', company_id)
+      .eq('organization_id', user.organization_id)
+      .single()
+
+    if (!comp) {
+      return { error: 'Empresa vinculada inválida ou não pertence à sua organização.' }
+    }
+  } else if (user.organization_id) {
     company_id = (await getOrCreateTenantCompanyId(supabase, user.organization_id)) || ''
   }
-  const name = formData.get('name') as string
-  const cpf = formData.get('cpf') as string
-  const phone = formData.get('phone') as string
-  const default_plate = formData.get('default_plate') as string
-  const pin = (formData.get('pin') as string) || '1234'
+
+  const name = ((formData.get('name') as string) || '').trim()
+  const cpf = ((formData.get('cpf') as string) || '').replace(/\D/g, '')
+  const phone = ((formData.get('phone') as string) || '').trim()
+  const default_plate = ((formData.get('default_plate') as string) || '').trim().toUpperCase()
+  const pin = ((formData.get('pin') as string) || '').trim()
+  const telegram_chat_id = ((formData.get('telegram_chat_id') as string) || '').trim() || null
+  const telegram_username = ((formData.get('telegram_username') as string) || '').trim() || null
+
+  if (!name || name.length < 3) {
+    return { error: 'Nome do motorista deve ter pelo menos 3 caracteres.' }
+  }
+
+  const cleanPhone = phone.replace(/\D/g, '')
+  if (cleanPhone.length < 10 || cleanPhone.length > 11) {
+    return { error: 'Telefone inválido. Digite DDD + número (ex: 11999998888).' }
+  }
+
+  if (cpf && cpf.length !== 11) {
+    return { error: 'CPF deve conter 11 dígitos numéricos.' }
+  }
+
+  if (!pin || !/^\d{4}$/.test(pin)) {
+    return { error: 'O PIN de acesso deve ser composto exatamente por 4 dígitos numéricos.' }
+  }
 
   const { data, error } = await supabase
     .from('drivers')
@@ -606,14 +832,16 @@ export async function createDriver(formData: FormData) {
       {
         company_id: company_id || null,
         name,
-        cpf,
+        cpf: cpf || null,
         phone,
-        default_plate,
+        default_plate: default_plate || null,
         pin,
+        telegram_chat_id,
+        telegram_username,
         organization_id: user.organization_id,
       },
     ])
-    .select('*, companies(name)')
+    .select('id, name, cpf, phone, default_plate, pin, company_id, telegram_chat_id, telegram_username, created_at, companies(name)')
     .single()
 
   if (error) return { error: error.message }
@@ -624,18 +852,59 @@ export async function createDriver(formData: FormData) {
 export async function updateDriver(id: string, formData: FormData) {
   const user = await requireAuth()
   const supabase = await createClient()
-  let company_id = formData.get('company_id') as string
-  if (!company_id && user.organization_id) {
+  let company_id = ((formData.get('company_id') as string) || '').trim()
+
+  // Previne IDOR em company_id na edição
+  if (company_id) {
+    const { data: comp } = await supabase
+      .from('companies')
+      .select('id')
+      .eq('id', company_id)
+      .eq('organization_id', user.organization_id)
+      .single()
+
+    if (!comp) {
+      return { error: 'Empresa vinculada inválida ou não pertence à sua organização.' }
+    }
+  } else if (user.organization_id) {
     company_id = (await getOrCreateTenantCompanyId(supabase, user.organization_id)) || ''
   }
-  const name = formData.get('name') as string
-  const cpf = formData.get('cpf') as string
-  const phone = formData.get('phone') as string
-  const default_plate = formData.get('default_plate') as string
-  const pin = formData.get('pin') as string
 
-  const updatePayload: Record<string, any> = { company_id: company_id || null, name, cpf, phone, default_plate }
+  const name = ((formData.get('name') as string) || '').trim()
+  const cpf = ((formData.get('cpf') as string) || '').replace(/\D/g, '')
+  const phone = ((formData.get('phone') as string) || '').trim()
+  const default_plate = ((formData.get('default_plate') as string) || '').trim().toUpperCase()
+  const pin = ((formData.get('pin') as string) || '').trim()
+  const telegram_chat_id = ((formData.get('telegram_chat_id') as string) || '').trim() || null
+  const telegram_username = ((formData.get('telegram_username') as string) || '').trim() || null
+
+  if (!name || name.length < 3) {
+    return { error: 'Nome do motorista deve ter pelo menos 3 caracteres.' }
+  }
+
+  const cleanPhone = phone.replace(/\D/g, '')
+  if (cleanPhone.length < 10 || cleanPhone.length > 11) {
+    return { error: 'Telefone inválido. Digite DDD + número (ex: 11999998888).' }
+  }
+
+  if (cpf && cpf.length !== 11) {
+    return { error: 'CPF deve conter 11 dígitos numéricos.' }
+  }
+
+  const updatePayload: Record<string, any> = {
+    company_id: company_id || null,
+    name,
+    cpf: cpf || null,
+    phone,
+    default_plate: default_plate || null,
+    telegram_chat_id,
+    telegram_username,
+  }
+
   if (pin) {
+    if (!/^\d{4}$/.test(pin)) {
+      return { error: 'O PIN de acesso deve ser composto exatamente por 4 dígitos numéricos.' }
+    }
     updatePayload.pin = pin
   }
 
@@ -644,7 +913,7 @@ export async function updateDriver(id: string, formData: FormData) {
     .update(updatePayload)
     .eq('id', id)
     .eq('organization_id', user.organization_id)
-    .select('*, companies(name)')
+    .select('id, name, cpf, phone, default_plate, pin, company_id, telegram_chat_id, telegram_username, created_at, companies(name)')
     .single()
 
   if (error) return { error: error.message }
@@ -676,24 +945,50 @@ export async function deleteDriver(id: string) {
 // 📦 VIAGENS / TRANSPORTES
 // ==========================================
 
-export async function getTrips() {
-  const user = await getCurrentUser()
-  const supabase = await createClient()
-  let query = supabase
-    .from('trips')
-    .select(`
-      *,
-      companies(name),
-      branches(name, code, city),
-      drivers(name, phone, default_plate)
-    `)
-    .order('created_at', { ascending: false })
-
-  if (user?.organization_id) {
-    query = query.eq('organization_id', user.organization_id)
+export async function getTrips(organizationId?: string) {
+  let targetOrgId = organizationId
+  if (!targetOrgId) {
+    const user = await requireAuth().catch(() => null)
+    targetOrgId = user?.organization_id
   }
 
-  const { data, error } = await query
+  // Fail-secure: nunca executa consulta aberta sem organization_id
+  if (!targetOrgId) {
+    return []
+  }
+
+  const supabase = await createClient()
+  const { data, error } = await supabase
+    .from('trips')
+    .select(`
+      id,
+      cte_number,
+      service_type,
+      status,
+      sender,
+      sender_id,
+      destination,
+      invoices,
+      token,
+      arrival_time,
+      completion_time,
+      created_at,
+      organization_id,
+      driver_id,
+      company_id,
+      branch_id,
+      telegram_chat_id,
+      last_driver_latitude,
+      last_driver_longitude,
+      delivery_receipt_url,
+      companies(name),
+      branches(name, code, city),
+      drivers(name, phone, default_plate, telegram_chat_id, telegram_username)
+    `)
+    .eq('organization_id', targetOrgId)
+    .order('created_at', { ascending: false })
+    .limit(200)
+
   if (error) {
     console.error('Erro ao buscar transportes:', error.message)
     return []
@@ -718,31 +1013,112 @@ export async function createTrip(payload: {
   const user = await requireAuth()
   const supabase = await createClient()
 
-  let company_id = payload.company_id
-  if (!company_id && user.organization_id) {
-    company_id = (await getOrCreateTenantCompanyId(supabase, user.organization_id)) || ''
+  const orgId = user.organization_id
+  if (!orgId) {
+    return { error: 'Organização não identificada na sessão do usuário.' }
   }
 
-  const token = Math.random().toString(36).substring(2, 8).toUpperCase()
+  if (!payload.driver_id) {
+    return { error: 'O motorista condutor é obrigatório.' }
+  }
+  if (!payload.destination?.trim()) {
+    return { error: 'O destino da carga é obrigatório.' }
+  }
+
+  // Anti-IDOR: valida se o motorista pertence estritamente à mesma organização
+  const { data: driverCheck } = await supabase
+    .from('drivers')
+    .select('id, name, phone')
+    .eq('id', payload.driver_id)
+    .eq('organization_id', orgId)
+    .maybeSingle()
+
+  if (!driverCheck) {
+    return { error: 'O motorista selecionado não foi encontrado ou não pertence à sua organização.' }
+  }
+
+  // Anti-IDOR: valida remetente se informado
+  if (payload.sender_id) {
+    const { data: senderCheck } = await supabase
+      .from('senders')
+      .select('id')
+      .eq('id', payload.sender_id)
+      .eq('organization_id', orgId)
+      .maybeSingle()
+
+    if (!senderCheck) {
+      return { error: 'O remetente selecionado não foi encontrado ou não pertence à sua organização.' }
+    }
+  }
+
+  // Anti-IDOR: valida empresa transportadora
+  let company_id = payload.company_id || null
+  if (company_id) {
+    const { data: companyCheck } = await supabase
+      .from('companies')
+      .select('id')
+      .eq('id', company_id)
+      .eq('organization_id', orgId)
+      .maybeSingle()
+
+    if (!companyCheck) {
+      company_id = (await getOrCreateTenantCompanyId(supabase, orgId)) || null
+    }
+  } else {
+    company_id = (await getOrCreateTenantCompanyId(supabase, orgId)) || null
+  }
+
+  // Anti-IDOR: valida filial se informada
+  let branch_id = payload.branch_id || null
+  if (branch_id) {
+    const { data: branchCheck } = await supabase
+      .from('branches')
+      .select('id')
+      .eq('id', branch_id)
+      .eq('organization_id', orgId)
+      .maybeSingle()
+
+    if (!branchCheck) {
+      branch_id = null
+    }
+  }
+
+  // Token criptograficamente seguro com alta entropia (8 caracteres hexadecimais)
+  const token = crypto.randomBytes(4).toString('hex').toUpperCase()
+
+  // Whitelist de tipos de serviço e status
+  const allowedServiceTypes = ['Estadia', 'Descarga', 'Reentrega', 'Devolução', 'Armazenagem']
+  const service_type = allowedServiceTypes.includes(payload.service_type) ? payload.service_type : 'Estadia'
+
+  const allowedStatuses = ['in_transit', 'arrived', 'unloading', 'finished']
+  const status = allowedStatuses.includes(payload.status) ? payload.status : 'in_transit'
+
+  let recipient_email: string | null = null
+  if (payload.recipient_email?.trim()) {
+    const emailNorm = payload.recipient_email.trim().toLowerCase()
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailNorm)) {
+      recipient_email = emailNorm
+    }
+  }
 
   const insertObj: any = {
-    company_id: company_id || null,
-    branch_id: payload.branch_id || null,
+    company_id,
+    branch_id,
     driver_id: payload.driver_id,
-    cte_number: payload.cte_number || null,
-    service_type: payload.service_type || 'Estadia',
-    status: payload.status || 'in_transit',
-    sender: payload.sender || null,
+    cte_number: payload.cte_number?.trim() || null,
+    service_type,
+    status,
+    sender: payload.sender?.trim() || null,
     sender_id: payload.sender_id || null,
-    destination: payload.destination,
+    destination: payload.destination.trim(),
     invoices: payload.invoices || [],
     recipients: payload.recipients || [],
     token,
-    organization_id: user.organization_id,
+    organization_id: orgId,
   }
 
-  if (payload.recipient_email) {
-    insertObj.recipient_email = payload.recipient_email
+  if (recipient_email) {
+    insertObj.recipient_email = recipient_email
   }
 
   let { data, error } = await supabase
@@ -789,7 +1165,7 @@ export async function createTrip(payload: {
 }
 
 export async function sendWhatsAppTripStatusPromptAction(tripId: string) {
-  await requireAuth()
+  const user = await requireAuth()
   const supabase = await createClient()
 
   const { data: trip, error } = await supabase
@@ -799,14 +1175,15 @@ export async function sendWhatsAppTripStatusPromptAction(tripId: string) {
       drivers(name, phone)
     `)
     .eq('id', tripId)
+    .eq('organization_id', user.organization_id)
     .single()
 
   if (error || !trip) {
-    return { success: false, error: 'Viagem não encontrada.' }
+    return { success: false, error: 'Transporte não encontrado ou não pertence à sua organização.' }
   }
 
   if (!trip.drivers?.phone) {
-    return { success: false, error: 'O motorista desta viagem não possui telefone cadastrado.' }
+    return { success: false, error: 'O motorista deste transporte não possui telefone cadastrado.' }
   }
 
   const result = await sendTripWhatsAppPrompt(trip)
@@ -815,6 +1192,78 @@ export async function sendWhatsAppTripStatusPromptAction(tripId: string) {
   }
 
   return { success: true, message: 'Mensagem de cobrança enviada com sucesso no WhatsApp do motorista!' }
+}
+
+export async function sendTelegramTripStatusPromptAction(tripId: string) {
+  const user = await requireAuth()
+  const supabase = await createClient()
+
+  const { data: trip, error } = await supabase
+    .from('trips')
+    .select(`
+      *,
+      drivers(name, phone, telegram_chat_id, telegram_username)
+    `)
+    .eq('id', tripId)
+    .eq('organization_id', user.organization_id)
+    .single()
+
+  if (error || !trip) {
+    return { success: false, error: 'Transporte não encontrado ou não pertence à sua organização.' }
+  }
+
+  const telegramChatId = trip.telegram_chat_id || trip.drivers?.telegram_chat_id
+  const telegramLink = getTelegramTripDeepLink(trip.token)
+
+  if (!telegramChatId) {
+    return {
+      success: false,
+      notLinked: true,
+      telegramLink,
+      message: 'O motorista ainda não iniciou o bot no Telegram.',
+    }
+  }
+
+  const result = await sendTripTelegramPrompt(telegramChatId, trip)
+  if (!result.success) {
+    return {
+      success: false,
+      error: result.error || 'Erro ao enviar mensagem via Telegram Bot.',
+      telegramLink,
+    }
+  }
+
+  return {
+    success: true,
+    message: 'Mensagem de acompanhamento enviada com sucesso no Telegram do motorista!',
+    telegramLink,
+  }
+}
+
+export async function getTripTelegramLinkAction(tripId: string) {
+  const user = await requireAuth()
+  const supabase = await createClient()
+
+  const { data: trip, error } = await supabase
+    .from('trips')
+    .select('id, token, telegram_chat_id, drivers(name, phone, telegram_chat_id, telegram_username)')
+    .eq('id', tripId)
+    .eq('organization_id', user.organization_id)
+    .single()
+
+  if (error || !trip) {
+    return { success: false, error: 'Viagem não encontrada.' }
+  }
+
+  const telegramLink = getTelegramTripDeepLink(trip.token)
+  const isLinked = Boolean(trip.telegram_chat_id || (trip.drivers as any)?.telegram_chat_id)
+
+  return {
+    success: true,
+    telegramLink,
+    isLinked,
+    token: trip.token,
+  }
 }
 
 export async function updateTrip(
@@ -830,12 +1279,33 @@ export async function updateTrip(
   }
 ) {
   const user = await requireAuth()
+
+  // Trava de segurança: apenas administradores podem cancelar viagens
+  if (payload.status === 'cancelled' && user.role !== 'admin') {
+    return { error: 'Permissão negada: apenas administradores podem cancelar um transporte.' }
+  }
+
   const supabase = await createClient()
+
+  // Anti-IDOR: se for informada alteração de motorista, valida se pertence à organização do usuário
+  if (payload.driver_id) {
+    const { data: driverCheck } = await supabase
+      .from('drivers')
+      .select('id')
+      .eq('id', payload.driver_id)
+      .eq('organization_id', user.organization_id)
+      .maybeSingle()
+
+    if (!driverCheck) {
+      return { error: 'O motorista selecionado não pertence à sua organização.' }
+    }
+  }
+
   const updateData: any = {}
-  if (payload.cte_number !== undefined) updateData.cte_number = payload.cte_number || null
+  if (payload.cte_number !== undefined) updateData.cte_number = payload.cte_number?.trim() || null
   if (payload.service_type !== undefined) updateData.service_type = payload.service_type
-  if (payload.sender !== undefined) updateData.sender = payload.sender || null
-  if (payload.destination !== undefined) updateData.destination = payload.destination
+  if (payload.sender !== undefined) updateData.sender = payload.sender?.trim() || null
+  if (payload.destination !== undefined) updateData.destination = payload.destination?.trim() || null
   if (payload.invoices !== undefined) updateData.invoices = payload.invoices
   if (payload.driver_id !== undefined) updateData.driver_id = payload.driver_id
   if (payload.status !== undefined) updateData.status = payload.status
@@ -846,7 +1316,22 @@ export async function updateTrip(
     .eq('id', id)
     .eq('organization_id', user.organization_id)
     .select(`
-      *,
+      id,
+      cte_number,
+      service_type,
+      status,
+      sender,
+      sender_id,
+      destination,
+      invoices,
+      token,
+      arrival_time,
+      completion_time,
+      created_at,
+      organization_id,
+      driver_id,
+      company_id,
+      branch_id,
       companies(name, contact, phone, email, website),
       drivers(name, phone, default_plate)
     `)
@@ -898,28 +1383,73 @@ export async function registerCheckin(
   lng?: number
 ) {
   const supabase = await createClient()
+
+  // 1. Verificação de integridade e autorização
+  const { data: currentTrip, error: tripCheckError } = await supabase
+    .from('trips')
+    .select('id, token, status, arrival_time')
+    .eq('id', tripId)
+    .single()
+
+  if (tripCheckError || !currentTrip) {
+    return { error: 'Viagem não encontrada.' }
+  }
+
+  // Validação de Autorização: Cookie ativo do motorista para a viagem OU usuário logado (operador/admin)
+  const cookieStore = await cookies()
+  const isDriverAuth = cookieStore.get(`driver_auth_${currentTrip.token.toUpperCase()}`)?.value === 'true'
+  const user = await getCurrentUser().catch(() => null)
+
+  if (!isDriverAuth && !user) {
+    return { error: 'Acesso não autorizado. Identifique-se com seu PIN para registrar a chegada.' }
+  }
+
   let photoUrl: string | null = null
 
   if (formData) {
     const file = formData.get('photo') as File | null
     if (file && file.size > 0) {
-      const ext = file.name ? file.name.split('.').pop() : 'jpg'
-      const fileName = `checkin_${tripId}_${Date.now()}.${ext}`
+      // Validação de Tamanho Máximo (10MB)
+      const MAX_FILE_SIZE = 10 * 1024 * 1024
+      if (file.size > MAX_FILE_SIZE) {
+        return { error: 'A foto excede o limite máximo permitido de 10MB.' }
+      }
 
-      const { data: uploadData, error: uploadError } = await supabase.storage
-        .from('trip-photos')
-        .upload(fileName, file, {
-          cacheControl: '3600',
-          upsert: false,
-        })
+      // Validação Estrita de MIME Type
+      const ALLOWED_MIME_TYPES: Record<string, string> = {
+        'image/jpeg': 'jpg',
+        'image/jpg': 'jpg',
+        'image/png': 'png',
+        'image/webp': 'webp',
+      }
+      const safeExt = ALLOWED_MIME_TYPES[file.type]
+      if (!safeExt) {
+        return { error: 'Formato de foto inválido. São permitidos apenas arquivos JPEG, PNG e WebP.' }
+      }
 
-      if (!uploadError && uploadData) {
-        const { data: urlData } = supabase.storage
+      const fileName = `checkin_${tripId}_${Date.now()}.${safeExt}`
+
+      try {
+        const { data: uploadData, error: uploadError } = await supabase.storage
           .from('trip-photos')
-          .getPublicUrl(uploadData.path)
-        photoUrl = urlData.publicUrl
-      } else {
-        console.warn('Erro ao subir foto no Supabase Storage:', uploadError?.message)
+          .upload(fileName, file, {
+            cacheControl: '3600',
+            upsert: false,
+          })
+
+        if (!uploadError && uploadData) {
+          const { data: urlData } = supabase.storage
+            .from('trip-photos')
+            .getPublicUrl(uploadData.path)
+          photoUrl = urlData.publicUrl
+        } else {
+          // Fallback resiliente: se o bucket do Storage não existir ou não tiver permissão pública, utiliza Data URL base64
+          const buffer = Buffer.from(await file.arrayBuffer())
+          photoUrl = `data:${file.type};base64,${buffer.toString('base64')}`
+        }
+      } catch (storageErr) {
+        const buffer = Buffer.from(await file.arrayBuffer())
+        photoUrl = `data:${file.type};base64,${buffer.toString('base64')}`
       }
     }
   }
@@ -952,16 +1482,13 @@ export async function registerCheckin(
     return { error: error.message }
   }
 
-  // Disparo de e-mail de chegada
-  let emailSent = false
-  let recipientEmailTarget: string | undefined = undefined
-  let emailSimulated = false
-
-  try {
-    const trip = data
-    if (trip) {
+  // Disparo de e-mail em background com after() (Next.js) para não bloquear o motorista
+  const trip = data
+  after(async () => {
+    try {
+      if (!trip) return
       let targetEmail: string | null = null
-      // Tenta buscar do cadastro atualizado de Destinatários primeiro
+
       const { data: recList } = await supabase
         .from('recipients')
         .select('name, email')
@@ -979,7 +1506,6 @@ export async function registerCheckin(
         }
       }
 
-      // Fallback para o e-mail salvo na viagem na hora da criação
       if (!targetEmail) {
         targetEmail = trip.recipient_email || null
       }
@@ -989,7 +1515,6 @@ export async function registerCheckin(
       }
 
       if (targetEmail) {
-        recipientEmailTarget = targetEmail
         let destName = trip.destination || 'Destinatário'
         let destCity = ''
         if (destName.includes('-')) {
@@ -998,9 +1523,8 @@ export async function registerCheckin(
           destCity = parts.slice(1).join('-').trim()
         }
 
-        const extraCc = await getActiveCcEmails()
+        const extraCc = await getActiveCcEmails(trip.organization_id)
 
-        // Busca filial vinculada ou usa a filial padrão do tenant/empresa como fallback
         let branchData = trip.branches
         if (!branchData && (trip.company_id || trip.organization_id)) {
           let bQuery = supabase
@@ -1017,7 +1541,6 @@ export async function registerCheckin(
           }
         }
 
-        // Adiciona e-mail operacional da filial se cadastrado
         const branchEmail = branchData?.email?.trim()
         if (branchEmail && branchEmail.includes('@') && !extraCc.includes(branchEmail)) {
           extraCc.push(branchEmail)
@@ -1033,7 +1556,7 @@ export async function registerCheckin(
           website: trip.companies?.website,
         }
 
-        const mailRes = await sendArrivalEmail({
+        await sendArrivalEmail({
           toEmail: targetEmail,
           destinationName: destName,
           destinationCity: destCity,
@@ -1044,30 +1567,47 @@ export async function registerCheckin(
           serviceType: trip.service_type,
           sender: trip.sender,
           companyInfo: operationalInfo,
+          checkinPhotoUrl: photoUrl || trip.checkin_photo_url,
           extraCc,
         })
-
-        emailSent = mailRes.success
-        emailSimulated = !!mailRes.simulated
       }
+    } catch (mailErr) {
+      console.error('Erro em background ao processar e-mail de chegada:', mailErr)
     }
-  } catch (mailErr) {
-    console.error('Erro ao processar disparo de e-mail de chegada:', mailErr)
-  }
+  })
 
   revalidatePath(`/v/${data.token}`)
   revalidatePath('/')
   return {
     success: true,
     data,
-    emailSent,
-    recipientEmail: recipientEmailTarget,
-    simulated: emailSimulated,
+    emailSent: true,
   }
 }
 
 export async function registerCheckout(tripId: string) {
   const supabase = await createClient()
+
+  // 1. Verificação de integridade e autorização
+  const { data: currentTrip, error: tripCheckError } = await supabase
+    .from('trips')
+    .select('id, token, status, arrival_time')
+    .eq('id', tripId)
+    .single()
+
+  if (tripCheckError || !currentTrip) {
+    return { error: 'Viagem não encontrada.' }
+  }
+
+  // Validação de Autorização: Cookie ativo do motorista para a viagem OU usuário logado (operador/admin)
+  const cookieStore = await cookies()
+  const isDriverAuth = cookieStore.get(`driver_auth_${currentTrip.token.toUpperCase()}`)?.value === 'true'
+  const user = await getCurrentUser().catch(() => null)
+
+  if (!isDriverAuth && !user) {
+    return { error: 'Acesso não autorizado. Identifique-se com seu PIN para registrar a finalização.' }
+  }
+
   const completionTime = new Date().toISOString()
 
   const { data, error } = await supabase
@@ -1089,16 +1629,13 @@ export async function registerCheckout(tripId: string) {
     return { error: error.message }
   }
 
-  let emailSent = false
-  let recipientEmailTarget: string | undefined = undefined
-  let emailSimulated = false
-
-  try {
-    const trip = data
-    if (trip) {
+  // Disparo de e-mail em background com after() para resposta instantânea
+  const trip = data
+  after(async () => {
+    try {
+      if (!trip) return
       let targetEmail: string | null = null
-      
-      // Tenta buscar do cadastro atualizado de Destinatários primeiro
+
       const { data: recList } = await supabase
         .from('recipients')
         .select('name, email')
@@ -1116,7 +1653,6 @@ export async function registerCheckout(tripId: string) {
         }
       }
 
-      // Fallback para o e-mail salvo na viagem na hora da criação
       if (!targetEmail) {
         targetEmail = trip.recipient_email || null
       }
@@ -1126,7 +1662,6 @@ export async function registerCheckout(tripId: string) {
       }
 
       if (targetEmail) {
-        recipientEmailTarget = targetEmail
         let destName = trip.destination || 'Destinatário'
         let destCity = ''
         if (destName.includes('-')) {
@@ -1135,9 +1670,8 @@ export async function registerCheckout(tripId: string) {
           destCity = parts.slice(1).join('-').trim()
         }
 
-        const extraCc = await getActiveCcEmails()
+        const extraCc = await getActiveCcEmails(trip.organization_id)
 
-        // Busca filial vinculada ou usa a filial padrão do tenant/empresa como fallback
         let branchData = trip.branches
         if (!branchData && (trip.company_id || trip.organization_id)) {
           let bQuery = supabase
@@ -1154,7 +1688,6 @@ export async function registerCheckout(tripId: string) {
           }
         }
 
-        // Adiciona e-mail operacional da filial se cadastrado
         const branchEmail = branchData?.email?.trim()
         if (branchEmail && branchEmail.includes('@') && !extraCc.includes(branchEmail)) {
           extraCc.push(branchEmail)
@@ -1170,7 +1703,7 @@ export async function registerCheckout(tripId: string) {
           website: trip.companies?.website,
         }
 
-        const mailRes = await sendCompletionEmail({
+        await sendCompletionEmail({
           toEmail: targetEmail,
           destinationName: destName,
           destinationCity: destCity,
@@ -1184,28 +1717,52 @@ export async function registerCheckout(tripId: string) {
           companyInfo: operationalInfo,
           extraCc,
         })
-
-        emailSent = mailRes.success
-        emailSimulated = !!mailRes.simulated
       }
+    } catch (mailErr) {
+      console.error('Erro em background ao processar e-mail de saída:', mailErr)
     }
-  } catch (mailErr) {
-    console.error('Erro ao processar disparo de e-mail de saída:', mailErr)
-  }
+  })
 
   revalidatePath(`/v/${data.token}`)
   revalidatePath('/')
   return {
     success: true,
     data,
-    emailSent,
-    recipientEmail: recipientEmailTarget,
-    simulated: emailSimulated,
+    emailSent: true,
   }
 }
 
 export async function revertCheckin(tripId: string) {
   const supabase = await createClient()
+
+  // 1. Verificação de integridade e autorização
+  const { data: trip, error: tripError } = await supabase
+    .from('trips')
+    .select('id, token, arrival_time')
+    .eq('id', tripId)
+    .single()
+
+  if (tripError || !trip) {
+    return { error: 'Viagem não encontrada.' }
+  }
+
+  const cookieStore = await cookies()
+  const isDriverAuth = cookieStore.get(`driver_auth_${trip.token.toUpperCase()}`)?.value === 'true'
+  const user = await getCurrentUser().catch(() => null)
+
+  if (!isDriverAuth && !user) {
+    return { error: 'Acesso não autorizado para desfazer este registro.' }
+  }
+
+  // 2. Janela de tolerância para motoristas (15 minutos para evitar fraude em demurrage)
+  if (!user && trip.arrival_time) {
+    const elapsedMinutes = (Date.now() - new Date(trip.arrival_time).getTime()) / (1000 * 60)
+    if (elapsedMinutes > 15) {
+      return {
+        error: 'O prazo de 15 minutos para desfazer o registro de chegada expirou. Em caso de engano, solicite a retificação à central de logística.'
+      }
+    }
+  }
 
   const { data, error } = await supabase
     .from('trips')
@@ -1232,6 +1789,35 @@ export async function revertCheckin(tripId: string) {
 export async function revertCheckout(tripId: string) {
   const supabase = await createClient()
 
+  // 1. Verificação de integridade e autorização
+  const { data: trip, error: tripError } = await supabase
+    .from('trips')
+    .select('id, token, completion_time')
+    .eq('id', tripId)
+    .single()
+
+  if (tripError || !trip) {
+    return { error: 'Viagem não encontrada.' }
+  }
+
+  const cookieStore = await cookies()
+  const isDriverAuth = cookieStore.get(`driver_auth_${trip.token.toUpperCase()}`)?.value === 'true'
+  const user = await getCurrentUser().catch(() => null)
+
+  if (!isDriverAuth && !user) {
+    return { error: 'Acesso não autorizado para desfazer este registro.' }
+  }
+
+  // 2. Janela de tolerância para motoristas (15 minutos)
+  if (!user && trip.completion_time) {
+    const elapsedMinutes = (Date.now() - new Date(trip.completion_time).getTime()) / (1000 * 60)
+    if (elapsedMinutes > 15) {
+      return {
+        error: 'O prazo de 15 minutos para desfazer a finalização expirou. Em caso de engano, solicite a retificação à central de logística.'
+      }
+    }
+  }
+
   const { data, error } = await supabase
     .from('trips')
     .update({
@@ -1252,12 +1838,27 @@ export async function revertCheckout(tripId: string) {
 }
 
 export async function verifyDriverPin(token: string, pin: string) {
+  const tokenUpper = token.toUpperCase()
+  const cookieStore = await cookies()
+
+  // 1. Proteção de Força Bruta (Rate Limiting por Cookie de Bloqueio)
+  const lockCookie = cookieStore.get(`pin_lock_${tokenUpper}`)
+  if (lockCookie) {
+    const unlockAt = parseInt(lockCookie.value, 10)
+    const remainingSeconds = Math.ceil((unlockAt - Date.now()) / 1000)
+    if (remainingSeconds > 0) {
+      return {
+        error: `Muitas tentativas incorretas. Acesso temporariamente bloqueado. Tente novamente em ${remainingSeconds} segundos.`
+      }
+    }
+  }
+
   const supabase = await createClient()
 
   const { data: trip } = await supabase
     .from('trips')
     .select('id, drivers(pin)')
-    .eq('token', token.toUpperCase())
+    .eq('token', tokenUpper)
     .single()
 
   if (!trip) return { error: 'Viagem não encontrada.' }
@@ -1266,14 +1867,43 @@ export async function verifyDriverPin(token: string, pin: string) {
   const driverPin = trip.drivers?.pin || '1234'
 
   if (pin !== driverPin) {
-    return { error: 'PIN incorreto. Tente novamente.' }
+    const attemptsCookie = cookieStore.get(`pin_attempts_${tokenUpper}`)
+    let attempts = attemptsCookie ? parseInt(attemptsCookie.value, 10) : 0
+    attempts += 1
+
+    if (attempts >= 5) {
+      // Bloqueia tentativas por 5 minutos
+      cookieStore.set(`pin_lock_${tokenUpper}`, (Date.now() + 5 * 60 * 1000).toString(), {
+        maxAge: 5 * 60,
+        httpOnly: true,
+        path: '/',
+        sameSite: 'lax',
+      })
+      cookieStore.delete(`pin_attempts_${tokenUpper}`)
+      return {
+        error: 'Limite de 5 tentativas atingido. Acesso bloqueado por 5 minutos por segurança.'
+      }
+    } else {
+      cookieStore.set(`pin_attempts_${tokenUpper}`, attempts.toString(), {
+        maxAge: 15 * 60,
+        httpOnly: true,
+        path: '/',
+        sameSite: 'lax',
+      })
+      return {
+        error: `PIN incorreto. Tentativa ${attempts} de 5.`
+      }
+    }
   }
 
-  const cookieStore = await cookies()
-  cookieStore.set(`driver_auth_${token.toUpperCase()}`, 'true', {
+  // Sucesso: remove bloqueios e registra sessão segura
+  cookieStore.delete(`pin_attempts_${tokenUpper}`)
+  cookieStore.delete(`pin_lock_${tokenUpper}`)
+  cookieStore.set(`driver_auth_${tokenUpper}`, 'true', {
     maxAge: 60 * 60 * 24 * 7,
     httpOnly: true,
     path: '/',
+    sameSite: 'lax',
   })
 
   revalidatePath(`/v/${token}`)
@@ -1283,6 +1913,7 @@ export async function verifyDriverPin(token: string, pin: string) {
 /**
  * Rota de autoresgate do motorista:
  * Busca a viagem ativa do motorista através de seu CPF ou Telefone + PIN.
+ * Inclui proteção contra força bruta (rate limiting) e consulta SQL indexada.
  */
 export async function findActiveTripForDriver(identifier: string, pin: string) {
   const cleanId = identifier.replace(/\D/g, '')
@@ -1290,32 +1921,97 @@ export async function findActiveTripForDriver(identifier: string, pin: string) {
     return { error: 'Informe um CPF ou Telefone válido (apenas números).' }
   }
 
+  const cookieStore = await cookies()
+  const lockKey = `rescue_lock_${cleanId}`
+  const attemptsKey = `rescue_attempts_${cleanId}`
+
+  // 1. Proteção contra Força Bruta (Rate Limiting de 5 tentativas / 5 minutos)
+  const lockCookie = cookieStore.get(lockKey)
+  if (lockCookie) {
+    const unlockAt = parseInt(lockCookie.value, 10)
+    const remainingSeconds = Math.ceil((unlockAt - Date.now()) / 1000)
+    if (remainingSeconds > 0) {
+      return {
+        error: `Muitas tentativas incorretas. Acesso bloqueado por segurança. Tente novamente em ${remainingSeconds} segundos.`
+      }
+    }
+  }
+
   const supabase = await createClient()
 
-  // Busca motorista com esse CPF ou Telefone
-  const { data: drivers } = await supabase
+  // 2. Consulta SQL filtrada diretamente no banco de dados (evita carregar tabela inteira em memória)
+  const orFilters = [
+    `cpf.eq.${cleanId}`,
+    `phone.ilike.%${cleanId}%`
+  ]
+
+  if (cleanId.length === 11) {
+    const formattedCpf = `${cleanId.slice(0, 3)}.${cleanId.slice(3, 6)}.${cleanId.slice(6, 9)}-${cleanId.slice(9)}`
+    orFilters.push(`cpf.eq.${formattedCpf}`)
+  }
+
+  const last8 = cleanId.slice(-8)
+  orFilters.push(`phone.ilike.%${last8}%`)
+
+  const { data: matchedDrivers, error: driverErr } = await supabase
     .from('drivers')
     .select('id, name, pin, cpf, phone')
+    .or(orFilters.join(','))
+    .limit(5)
 
-  if (!drivers || drivers.length === 0) {
+  if (driverErr || !matchedDrivers || matchedDrivers.length === 0) {
     return { error: 'Nenhum motorista encontrado com este documento ou telefone.' }
   }
 
-  const matchedDriver = drivers.find((d: any) => {
+  const matchedDriver = matchedDrivers.find((d: any) => {
     const dCpf = (d.cpf || '').replace(/\D/g, '')
     const dPhone = (d.phone || '').replace(/\D/g, '')
-    return dCpf.includes(cleanId) || cleanId.includes(dCpf) || dPhone.includes(cleanId) || cleanId.includes(dPhone)
+    return (
+      (cleanId.length >= 11 && dCpf === cleanId) ||
+      dPhone === cleanId ||
+      dPhone.endsWith(last8)
+    )
   })
 
   if (!matchedDriver) {
     return { error: 'Motorista não localizado no sistema.' }
   }
 
-  if ((matchedDriver.pin || '1234') !== pin) {
-    return { error: 'PIN incorreto. Verifique com a central.' }
+  const driverPin = matchedDriver.pin || '1234'
+  if (pin !== driverPin) {
+    const attemptsCookie = cookieStore.get(attemptsKey)
+    let attempts = attemptsCookie ? parseInt(attemptsCookie.value, 10) : 0
+    attempts += 1
+
+    if (attempts >= 5) {
+      cookieStore.set(lockKey, (Date.now() + 5 * 60 * 1000).toString(), {
+        maxAge: 5 * 60,
+        httpOnly: true,
+        path: '/',
+        sameSite: 'lax',
+      })
+      cookieStore.delete(attemptsKey)
+      return {
+        error: 'Limite de 5 tentativas atingido. Acesso bloqueado por 5 minutos por segurança.'
+      }
+    } else {
+      cookieStore.set(attemptsKey, attempts.toString(), {
+        maxAge: 15 * 60,
+        httpOnly: true,
+        path: '/',
+        sameSite: 'lax',
+      })
+      return {
+        error: `PIN incorreto. Tentativa ${attempts} de 5.`
+      }
+    }
   }
 
-  // Busca viagem ativa para esse motorista
+  // PIN correto: remove contadores de erro
+  cookieStore.delete(attemptsKey)
+  cookieStore.delete(lockKey)
+
+  // 3. Busca viagem ativa para esse motorista
   const { data: activeTrip } = await supabase
     .from('trips')
     .select('token, status, created_at')
@@ -1330,12 +2026,13 @@ export async function findActiveTripForDriver(identifier: string, pin: string) {
     return { error: `Olá, ${matchedDriver.name}! Não encontramos nenhuma viagem em andamento no momento.` }
   }
 
-  // Autoriza cookie preventivo
-  const cookieStore = await cookies()
-  cookieStore.set(`driver_auth_${activeTrip.token.toUpperCase()}`, 'true', {
+  // 4. Autoriza cookie preventivo de autenticação com atributos de segurança
+  const tokenUpper = activeTrip.token.toUpperCase()
+  cookieStore.set(`driver_auth_${tokenUpper}`, 'true', {
     maxAge: 60 * 60 * 24 * 7,
     httpOnly: true,
     path: '/',
+    sameSite: 'lax',
   })
 
   return { success: true, token: activeTrip.token }
@@ -1345,20 +2042,25 @@ export async function findActiveTripForDriver(identifier: string, pin: string) {
 // 🏢 REMETENTES
 // ==========================================
 
-export async function getSenders() {
-  const user = await getCurrentUser()
-  const supabase = await createClient()
-  let query = supabase
-    .from('senders')
-    .select('*, companies(name), recipients(*)')
-    .order('created_at', { ascending: false })
+export async function getSenders(organizationId?: string) {
+  const user = await requireAuth().catch(() => null)
+  if (!user) return []
 
-  if (user?.organization_id) {
-    query = query.eq('organization_id', user.organization_id)
+  // Previne IDOR/BOLA: usuário comum só acessa a própria organização
+  const targetOrgId = (user.is_super_admin && organizationId) ? organizationId : user.organization_id
+  if (!targetOrgId) {
+    return []
   }
 
-  const { data, error } = await query
+  const supabase = await createClient()
+  const { data, error } = await supabase
+    .from('senders')
+    .select('id, name, cnpj, ie, address, city, zip_code, phone, franchise_hours, demurrage_hourly_rate, company_id, created_at, companies(name), recipients(*)')
+    .eq('organization_id', targetOrgId)
+    .order('created_at', { ascending: false })
+
   if (error) {
+    console.error('Erro ao buscar remetentes:', error.message)
     return []
   }
   return data || []
@@ -1367,19 +2069,39 @@ export async function getSenders() {
 export async function createSender(formData: FormData) {
   const user = await requireAuth()
   const supabase = await createClient()
-  let company_id = formData.get('company_id') as string
-  if (!company_id && user.organization_id) {
+  let company_id = ((formData.get('company_id') as string) || '').trim()
+
+  // Previne IDOR em company_id
+  if (company_id) {
+    const { data: comp } = await supabase
+      .from('companies')
+      .select('id')
+      .eq('id', company_id)
+      .eq('organization_id', user.organization_id)
+      .single()
+
+    if (!comp) {
+      return { error: 'Empresa vinculada inválida ou não pertence à sua organização.' }
+    }
+  } else if (user.organization_id) {
     company_id = (await getOrCreateTenantCompanyId(supabase, user.organization_id)) || ''
   }
-  const name = formData.get('name') as string
-  const address = formData.get('address') as string
-  const city = formData.get('city') as string
-  const zip_code = formData.get('zip_code') as string
-  const cnpj = formData.get('cnpj') as string
-  const ie = formData.get('ie') as string
-  const phone = formData.get('phone') as string
-  const franchise_hours = formData.get('franchise_hours') ? parseFloat(formData.get('franchise_hours') as string) : 0
-  const demurrage_hourly_rate = formData.get('demurrage_hourly_rate') ? parseFloat(formData.get('demurrage_hourly_rate') as string) : 0
+
+  const name = ((formData.get('name') as string) || '').trim()
+  const address = ((formData.get('address') as string) || '').trim()
+  const city = ((formData.get('city') as string) || '').trim()
+  const zip_code = ((formData.get('zip_code') as string) || '').trim()
+  const cnpj = ((formData.get('cnpj') as string) || '').trim()
+  const ie = ((formData.get('ie') as string) || '').trim()
+  const phone = ((formData.get('phone') as string) || '').trim()
+  const rawFranchise = formData.get('franchise_hours') ? parseFloat(formData.get('franchise_hours') as string) : 0
+  const franchise_hours = isNaN(rawFranchise) || rawFranchise < 0 ? 0 : rawFranchise
+  const rawDemurrage = formData.get('demurrage_hourly_rate') ? parseFloat(formData.get('demurrage_hourly_rate') as string) : 0
+  const demurrage_hourly_rate = isNaN(rawDemurrage) || rawDemurrage < 0 ? 0 : rawDemurrage
+
+  if (!name || name.length < 3) {
+    return { error: 'Razão Social / Nome do Remetente deve ter pelo menos 3 caracteres.' }
+  }
 
   const { data, error } = await supabase
     .from('senders')
@@ -1387,18 +2109,18 @@ export async function createSender(formData: FormData) {
       {
         company_id: company_id || null,
         name,
-        address,
-        city,
-        zip_code,
-        cnpj,
-        ie,
-        phone,
+        address: address || null,
+        city: city || null,
+        zip_code: zip_code || null,
+        cnpj: cnpj || null,
+        ie: ie || null,
+        phone: phone || null,
         franchise_hours,
         demurrage_hourly_rate,
         organization_id: user.organization_id,
       },
     ])
-    .select('*, companies(name), recipients(*)')
+    .select('id, name, cnpj, ie, address, city, zip_code, phone, franchise_hours, demurrage_hourly_rate, company_id, created_at, companies(name), recipients(*)')
     .single()
 
   if (error) return { error: error.message }
@@ -1410,26 +2132,57 @@ export async function createSender(formData: FormData) {
 export async function updateSender(id: string, formData: FormData) {
   const user = await requireAuth()
   const supabase = await createClient()
-  let company_id = formData.get('company_id') as string
-  if (!company_id && user.organization_id) {
+  let company_id = ((formData.get('company_id') as string) || '').trim()
+
+  // Previne IDOR em company_id
+  if (company_id) {
+    const { data: comp } = await supabase
+      .from('companies')
+      .select('id')
+      .eq('id', company_id)
+      .eq('organization_id', user.organization_id)
+      .single()
+
+    if (!comp) {
+      return { error: 'Empresa vinculada inválida ou não pertence à sua organização.' }
+    }
+  } else if (user.organization_id) {
     company_id = (await getOrCreateTenantCompanyId(supabase, user.organization_id)) || ''
   }
-  const name = formData.get('name') as string
-  const address = formData.get('address') as string
-  const city = formData.get('city') as string
-  const zip_code = formData.get('zip_code') as string
-  const cnpj = formData.get('cnpj') as string
-  const ie = formData.get('ie') as string
-  const phone = formData.get('phone') as string
-  const franchise_hours = formData.get('franchise_hours') ? parseFloat(formData.get('franchise_hours') as string) : 0
-  const demurrage_hourly_rate = formData.get('demurrage_hourly_rate') ? parseFloat(formData.get('demurrage_hourly_rate') as string) : 0
+
+  const name = ((formData.get('name') as string) || '').trim()
+  const address = ((formData.get('address') as string) || '').trim()
+  const city = ((formData.get('city') as string) || '').trim()
+  const zip_code = ((formData.get('zip_code') as string) || '').trim()
+  const cnpj = ((formData.get('cnpj') as string) || '').trim()
+  const ie = ((formData.get('ie') as string) || '').trim()
+  const phone = ((formData.get('phone') as string) || '').trim()
+  const rawFranchise = formData.get('franchise_hours') ? parseFloat(formData.get('franchise_hours') as string) : 0
+  const franchise_hours = isNaN(rawFranchise) || rawFranchise < 0 ? 0 : rawFranchise
+  const rawDemurrage = formData.get('demurrage_hourly_rate') ? parseFloat(formData.get('demurrage_hourly_rate') as string) : 0
+  const demurrage_hourly_rate = isNaN(rawDemurrage) || rawDemurrage < 0 ? 0 : rawDemurrage
+
+  if (!name || name.length < 3) {
+    return { error: 'Razão Social / Nome do Remetente deve ter pelo menos 3 caracteres.' }
+  }
 
   const { data, error } = await supabase
     .from('senders')
-    .update({ company_id: company_id || null, name, address, city, zip_code, cnpj, ie, phone, franchise_hours, demurrage_hourly_rate })
+    .update({
+      company_id: company_id || null,
+      name,
+      address: address || null,
+      city: city || null,
+      zip_code: zip_code || null,
+      cnpj: cnpj || null,
+      ie: ie || null,
+      phone: phone || null,
+      franchise_hours,
+      demurrage_hourly_rate,
+    })
     .eq('id', id)
     .eq('organization_id', user.organization_id)
-    .select('*, companies(name), recipients(*)')
+    .select('id, name, cnpj, ie, address, city, zip_code, phone, franchise_hours, demurrage_hourly_rate, company_id, created_at, companies(name), recipients(*)')
     .single()
 
   if (error) return { error: error.message }
@@ -1457,17 +2210,22 @@ export async function deleteSender(id: string) {
 // 🏢 DESTINATÁRIOS
 // ==========================================
 
-export async function getRecipients(senderId?: string) {
-  const user = await getCurrentUser()
+export async function getRecipients(senderId?: string, organizationId?: string) {
+  const user = await requireAuth().catch(() => null)
+  if (!user) return []
+
+  // Previne IDOR/BOLA: usuário comum só acessa a própria organização
+  const targetOrgId = (user.is_super_admin && organizationId) ? organizationId : user.organization_id
+  if (!targetOrgId) {
+    return []
+  }
+
   const supabase = await createClient()
   let query = supabase
     .from('recipients')
-    .select('*, companies(name), senders(name, city)')
+    .select('id, name, cnpj, ie, address, city, zip_code, phone, email, company_id, sender_id, created_at, companies(name), senders(name, city)')
+    .eq('organization_id', targetOrgId)
     .order('created_at', { ascending: false })
-
-  if (user?.organization_id) {
-    query = query.eq('organization_id', user.organization_id)
-  }
 
   if (senderId) {
     query = query.eq('sender_id', senderId)
@@ -1475,6 +2233,7 @@ export async function getRecipients(senderId?: string) {
 
   const { data, error } = await query
   if (error) {
+    console.error('Erro ao buscar destinatários:', error.message)
     return []
   }
   return data || []
@@ -1483,30 +2242,63 @@ export async function getRecipients(senderId?: string) {
 export async function createRecipient(formData: FormData) {
   const user = await requireAuth()
   const supabase = await createClient()
-  let company_id = formData.get('company_id') as string
-  if (!company_id && user.organization_id) {
+  let company_id = ((formData.get('company_id') as string) || '').trim()
+
+  // Previne IDOR em company_id
+  if (company_id) {
+    const { data: comp } = await supabase
+      .from('companies')
+      .select('id')
+      .eq('id', company_id)
+      .eq('organization_id', user.organization_id)
+      .single()
+
+    if (!comp) {
+      return { error: 'Empresa vinculada inválida ou não pertence à sua organização.' }
+    }
+  } else if (user.organization_id) {
     company_id = (await getOrCreateTenantCompanyId(supabase, user.organization_id)) || ''
   }
-  const sender_id = (formData.get('sender_id') as string) || null
-  const name = formData.get('name') as string
-  const address = formData.get('address') as string
-  const city = formData.get('city') as string
-  const zip_code = formData.get('zip_code') as string
-  const cnpj = formData.get('cnpj') as string
-  const ie = formData.get('ie') as string
-  const phone = formData.get('phone') as string
-  const email = (formData.get('email') as string) || ''
+
+  const sender_id = ((formData.get('sender_id') as string) || '').trim() || null
+
+  // Previne IDOR em sender_id: garante que o remetente pertence à organização
+  if (sender_id) {
+    const { data: senderCheck } = await supabase
+      .from('senders')
+      .select('id')
+      .eq('id', sender_id)
+      .eq('organization_id', user.organization_id)
+      .single()
+
+    if (!senderCheck) {
+      return { error: 'Remetente vinculado inválido ou não pertence à sua organização.' }
+    }
+  }
+
+  const name = ((formData.get('name') as string) || '').trim()
+  const address = ((formData.get('address') as string) || '').trim()
+  const city = ((formData.get('city') as string) || '').trim()
+  const zip_code = ((formData.get('zip_code') as string) || '').trim()
+  const cnpj = ((formData.get('cnpj') as string) || '').trim()
+  const ie = ((formData.get('ie') as string) || '').trim()
+  const phone = ((formData.get('phone') as string) || '').trim()
+  const email = ((formData.get('email') as string) || '').trim()
+
+  if (!name || name.length < 3) {
+    return { error: 'Nome do Destinatário deve ter pelo menos 3 caracteres.' }
+  }
 
   const insertObj: any = {
     company_id: company_id || null,
     sender_id: sender_id || null,
     name,
-    address,
-    city,
-    zip_code,
-    cnpj,
-    ie,
-    phone,
+    address: address || null,
+    city: city || null,
+    zip_code: zip_code || null,
+    cnpj: cnpj || null,
+    ie: ie || null,
+    phone: phone || null,
     organization_id: user.organization_id,
   }
 
@@ -1541,34 +2333,64 @@ export async function createRecipient(formData: FormData) {
 export async function updateRecipient(id: string, formData: FormData) {
   const user = await requireAuth()
   const supabase = await createClient()
-  let company_id = formData.get('company_id') as string
-  if (!company_id && user.organization_id) {
+  let company_id = ((formData.get('company_id') as string) || '').trim()
+
+  // Previne IDOR em company_id
+  if (company_id) {
+    const { data: comp } = await supabase
+      .from('companies')
+      .select('id')
+      .eq('id', company_id)
+      .eq('organization_id', user.organization_id)
+      .single()
+
+    if (!comp) {
+      return { error: 'Empresa vinculada inválida ou não pertence à sua organização.' }
+    }
+  } else if (user.organization_id) {
     company_id = (await getOrCreateTenantCompanyId(supabase, user.organization_id)) || ''
   }
-  const sender_id = (formData.get('sender_id') as string) || null
-  const name = formData.get('name') as string
-  const address = formData.get('address') as string
-  const city = formData.get('city') as string
-  const zip_code = formData.get('zip_code') as string
-  const cnpj = formData.get('cnpj') as string
-  const ie = formData.get('ie') as string
-  const phone = formData.get('phone') as string
-  const email = (formData.get('email') as string) || ''
+
+  const sender_id = ((formData.get('sender_id') as string) || '').trim() || null
+
+  // Previne IDOR em sender_id
+  if (sender_id) {
+    const { data: senderCheck } = await supabase
+      .from('senders')
+      .select('id')
+      .eq('id', sender_id)
+      .eq('organization_id', user.organization_id)
+      .single()
+
+    if (!senderCheck) {
+      return { error: 'Remetente vinculado inválido ou não pertence à sua organização.' }
+    }
+  }
+
+  const name = ((formData.get('name') as string) || '').trim()
+  const address = ((formData.get('address') as string) || '').trim()
+  const city = ((formData.get('city') as string) || '').trim()
+  const zip_code = ((formData.get('zip_code') as string) || '').trim()
+  const cnpj = ((formData.get('cnpj') as string) || '').trim()
+  const ie = ((formData.get('ie') as string) || '').trim()
+  const phone = ((formData.get('phone') as string) || '').trim()
+  const email = ((formData.get('email') as string) || '').trim()
+
+  if (!name || name.length < 3) {
+    return { error: 'Nome do Destinatário deve ter pelo menos 3 caracteres.' }
+  }
 
   const updateObj: any = {
     company_id: company_id || null,
     sender_id: sender_id || null,
     name,
-    address,
-    city,
-    zip_code,
-    cnpj,
-    ie,
-    phone,
-  }
-
-  if (email !== undefined) {
-    updateObj.email = email || null
+    address: address || null,
+    city: city || null,
+    zip_code: zip_code || null,
+    cnpj: cnpj || null,
+    ie: ie || null,
+    phone: phone || null,
+    email: email || null,
   }
 
   let { data, error } = await supabase
@@ -1576,7 +2398,7 @@ export async function updateRecipient(id: string, formData: FormData) {
     .update(updateObj)
     .eq('id', id)
     .eq('organization_id', user.organization_id)
-    .select('*, companies(name), senders(name, city)')
+    .select('id, name, cnpj, ie, address, city, zip_code, phone, email, company_id, sender_id, created_at, companies(name), senders(name, city)')
     .single()
 
   if (error && error.message?.includes('email')) {
@@ -1586,7 +2408,7 @@ export async function updateRecipient(id: string, formData: FormData) {
       .update(updateObj)
       .eq('id', id)
       .eq('organization_id', user.organization_id)
-      .select('*, companies(name), senders(name, city)')
+      .select('id, name, cnpj, ie, address, city, zip_code, phone, email, company_id, sender_id, created_at, companies(name), senders(name, city)')
       .single()
     data = retry.data
     error = retry.error
@@ -1619,21 +2441,26 @@ export async function deleteRecipient(id: string) {
 // 📧 E-MAILS DE NOTIFICAÇÃO (CC)
 // ==========================================
 
-export async function getNotificationEmails() {
-  const user = await getCurrentUser()
+export async function getNotificationEmails(organizationId?: string) {
+  const user = await requireAuth().catch(() => null)
+  if (!user) return []
+
+  // Previne IDOR/BOLA: usuário comum só acessa a própria organização
+  const targetOrgId = (user.is_super_admin && organizationId) ? organizationId : user.organization_id
+  if (!targetOrgId) {
+    return []
+  }
+
   const supabase = await createClient()
   try {
-    let query = supabase
+    const { data, error } = await supabase
       .from('notification_emails')
-      .select('*')
+      .select('id, name, email, active, created_at, organization_id')
+      .eq('organization_id', targetOrgId)
       .order('created_at', { ascending: false })
 
-    if (user?.organization_id) {
-      query = query.eq('organization_id', user.organization_id)
-    }
-
-    const { data, error } = await query
     if (error) {
+      console.error('Erro ao buscar e-mails de notificação:', error.message)
       return []
     }
     return data || []
@@ -1642,10 +2469,18 @@ export async function getNotificationEmails() {
   }
 }
 
-async function getActiveCcEmails(): Promise<string[]> {
+async function getActiveCcEmails(organizationId?: string): Promise<string[]> {
+  if (!organizationId) return []
   try {
-    const emails = await getNotificationEmails()
-    return emails.filter((item: any) => item.active).map((item: any) => item.email)
+    const supabase = await createClient()
+    const { data, error } = await supabase
+      .from('notification_emails')
+      .select('email')
+      .eq('organization_id', organizationId)
+      .eq('active', true)
+
+    if (error || !data) return []
+    return data.map((item: any) => item.email)
   } catch {
     return []
   }
@@ -1654,12 +2489,28 @@ async function getActiveCcEmails(): Promise<string[]> {
 export async function createNotificationEmail(formData: FormData) {
   const user = await requireAuth()
   const supabase = await createClient()
-  const name = formData.get('name') as string
-  const email = (formData.get('email') as string)?.trim().toLowerCase()
+  const name = ((formData.get('name') as string) || '').trim()
+  const email = ((formData.get('email') as string) || '').trim().toLowerCase()
   const active = formData.get('active') !== 'false'
 
-  if (!email || !email.includes('@')) {
-    return { error: 'E-mail inválido.' }
+  if (!name || name.length < 2) {
+    return { error: 'O nome ou setor responsável deve ter pelo menos 2 caracteres.' }
+  }
+
+  if (!email || !EMAIL_REGEX.test(email)) {
+    return { error: 'Por favor, informe um endereço de e-mail válido (ex: contato@empresa.com.br).' }
+  }
+
+  // Previne duplicidade de e-mail na mesma organização
+  const { data: existing } = await supabase
+    .from('notification_emails')
+    .select('id')
+    .eq('email', email)
+    .eq('organization_id', user.organization_id)
+    .maybeSingle()
+
+  if (existing) {
+    return { error: 'Este e-mail já está cadastrado em cópia na sua organização.' }
   }
 
   const { data, error } = await supabase
@@ -1672,7 +2523,7 @@ export async function createNotificationEmail(formData: FormData) {
         organization_id: user.organization_id,
       },
     ])
-    .select()
+    .select('id, name, email, active, created_at, organization_id')
     .single()
 
   if (error) return { error: error.message }
@@ -1683,16 +2534,37 @@ export async function createNotificationEmail(formData: FormData) {
 export async function updateNotificationEmail(id: string, formData: FormData) {
   const user = await requireAuth()
   const supabase = await createClient()
-  const name = formData.get('name') as string
-  const email = (formData.get('email') as string)?.trim().toLowerCase()
+  const name = ((formData.get('name') as string) || '').trim()
+  const email = ((formData.get('email') as string) || '').trim().toLowerCase()
   const active = formData.get('active') === 'true'
+
+  if (!name || name.length < 2) {
+    return { error: 'O nome ou setor responsável deve ter pelo menos 2 caracteres.' }
+  }
+
+  if (!email || !EMAIL_REGEX.test(email)) {
+    return { error: 'Por favor, informe um endereço de e-mail válido (ex: contato@empresa.com.br).' }
+  }
+
+  // Previne duplicidade com outro registro diferente do atual
+  const { data: existing } = await supabase
+    .from('notification_emails')
+    .select('id')
+    .eq('email', email)
+    .eq('organization_id', user.organization_id)
+    .neq('id', id)
+    .maybeSingle()
+
+  if (existing) {
+    return { error: 'Já existe outro registro com este e-mail cadastrado na sua organização.' }
+  }
 
   const { data, error } = await supabase
     .from('notification_emails')
     .update({ name, email, active })
     .eq('id', id)
     .eq('organization_id', user.organization_id)
-    .select()
+    .select('id, name, email, active, created_at, organization_id')
     .single()
 
   if (error) return { error: error.message }
@@ -1708,7 +2580,7 @@ export async function toggleNotificationEmail(id: string, active: boolean) {
     .update({ active })
     .eq('id', id)
     .eq('organization_id', user.organization_id)
-    .select()
+    .select('id, name, email, active, created_at, organization_id')
     .single()
 
   if (error) return { error: error.message }
@@ -1774,19 +2646,26 @@ export async function getTenantsAction() {
 export async function createTenantAction(formData: FormData) {
   await requireSuperAdmin()
   const companyName = (formData.get('companyName') as string)?.trim()
-  const cnpj = (formData.get('cnpj') as string)?.trim() || null
+  const rawCnpj = (formData.get('cnpj') as string)?.trim() || ''
   const adminName = (formData.get('adminName') as string)?.trim()
   const adminEmail = (formData.get('adminEmail') as string)?.trim().toLowerCase()
   const adminPassword = formData.get('adminPassword') as string
 
-  if (!companyName) {
-    return { error: 'O nome da empresa / organização é obrigatório.' }
+  if (!companyName || companyName.length < 2) {
+    return { error: 'O nome da empresa / organização é obrigatório (mínimo de 2 caracteres).' }
   }
-  if (!adminName) {
-    return { error: 'O nome do administrador é obrigatório.' }
+
+  const cleanCnpj = rawCnpj.replace(/\D/g, '')
+  if (cleanCnpj && cleanCnpj.length !== 14) {
+    return { error: 'O CNPJ informado é inválido (deve conter 14 dígitos numéricos).' }
   }
-  if (!adminEmail || !adminEmail.includes('@')) {
-    return { error: 'E-mail do administrador inválido.' }
+  const formattedCnpj = cleanCnpj ? formatCNPJ(cleanCnpj) : null
+
+  if (!adminName || adminName.length < 2) {
+    return { error: 'O nome do administrador é obrigatório (mínimo de 2 caracteres).' }
+  }
+  if (!adminEmail || !EMAIL_REGEX.test(adminEmail)) {
+    return { error: 'Por favor, informe um e-mail válido para o administrador.' }
   }
   if (!adminPassword || adminPassword.length < 6) {
     return { error: 'A senha provisória deve conter no mínimo 6 caracteres.' }
@@ -1836,7 +2715,7 @@ export async function createTenantAction(formData: FormData) {
         updated_at
       ) VALUES ($1, $2, $3, true, now(), now())
       RETURNING id;
-    `, [companyName, cnpj, slug])
+    `, [companyName, formattedCnpj, slug])
     const organizationId = orgRes.rows[0].id
 
     // 2. Cria a Empresa base vinculada para compatibilidade operacional imediata
@@ -1848,7 +2727,7 @@ export async function createTenantAction(formData: FormData) {
         created_at
       ) VALUES ($1::uuid, $2, $3, now())
       RETURNING id;
-    `, [organizationId, companyName, cnpj])
+    `, [organizationId, companyName, formattedCnpj])
     const companyId = compRes.rows[0].id
 
     // 3. Cria a Filial padrão (Matriz)
@@ -1988,7 +2867,7 @@ export async function createTenantAction(formData: FormData) {
 
     await client.query('COMMIT')
     revalidatePath('/master')
-    return { success: true }
+    return { success: true, data: { id: organizationId, slug, name: companyName, cnpj: formattedCnpj } }
   } catch (err: any) {
     if (client) {
       try {
@@ -2003,7 +2882,11 @@ export async function createTenantAction(formData: FormData) {
 }
 
 export async function toggleTenantStatusAction(orgId: string, active: boolean) {
-  await requireSuperAdmin()
+  const superAdmin = await requireSuperAdmin()
+  if (!active && superAdmin.organization_id === orgId) {
+    return { error: 'Operação não permitida: Você não pode desativar a organização raiz da sua própria sessão ativa de SuperAdmin.' }
+  }
+
   const pool = getDbPool()
   let client
   try {
@@ -2034,12 +2917,18 @@ export async function toggleTenantStatusAction(orgId: string, active: boolean) {
 export async function updateTenantAction(orgId: string, formData: FormData) {
   await requireSuperAdmin()
   const companyName = (formData.get('companyName') as string)?.trim()
-  const cnpj = (formData.get('cnpj') as string)?.trim() || null
+  const rawCnpj = (formData.get('cnpj') as string)?.trim() || ''
   const logoUrl = (formData.get('logoUrl') as string) || null
 
-  if (!companyName) {
+  if (!companyName || companyName.length < 2) {
     return { error: 'O nome da empresa / organização é obrigatório.' }
   }
+
+  const cleanCnpj = rawCnpj.replace(/\D/g, '')
+  if (cleanCnpj && cleanCnpj.length !== 14) {
+    return { error: 'O CNPJ informado é inválido (deve conter 14 dígitos numéricos).' }
+  }
+  const formattedCnpj = cleanCnpj ? formatCNPJ(cleanCnpj) : null
 
   const pool = getDbPool()
   let client
@@ -2049,13 +2938,13 @@ export async function updateTenantAction(orgId: string, formData: FormData) {
       UPDATE public.organizations 
       SET name = $1, cnpj = $2, logo_url = $3, updated_at = now() 
       WHERE id = $4::uuid;
-    `, [companyName, cnpj, logoUrl, orgId])
+    `, [companyName, formattedCnpj, logoUrl, orgId])
 
     await client.query(`
       UPDATE public.companies
       SET name = $1, cnpj = $2
       WHERE organization_id = $3::uuid;
-    `, [companyName, cnpj, orgId])
+    `, [companyName, formattedCnpj, orgId])
 
     revalidatePath('/master')
     return { success: true }

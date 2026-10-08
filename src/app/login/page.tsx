@@ -1,18 +1,17 @@
 'use client'
 
 import { useState, useTransition } from 'react'
-import { useRouter } from 'next/navigation'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { ShieldCheck, Lock, Mail, AlertCircle, ArrowRight } from 'lucide-react'
+import { ShieldCheck, Lock, Mail, AlertCircle, ArrowRight, Eye, EyeOff, Loader2 } from 'lucide-react'
 import { signInAction } from '@/app/actions'
 
 export default function LoginPage() {
-  const router = useRouter()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [isPending, startTransition] = useTransition()
 
@@ -29,8 +28,8 @@ export default function LoginPage() {
       if (res?.error) {
         setError(res.error)
       } else {
-        router.push('/')
-        router.refresh()
+        // Redirecionamento atômico direto, evitando cascata dupla de router.push + router.refresh
+        window.location.href = '/'
       }
     })
   }
@@ -69,7 +68,7 @@ export default function LoginPage() {
             {error && (
               <div className="p-3.5 bg-red-50 border border-red-200 rounded-[6px] text-xs text-red-700 flex items-start gap-2.5 animate-in fade-in-50">
                 <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
-                <span>{error}</span>
+                <span className="leading-relaxed">{error}</span>
               </div>
             )}
 
@@ -82,11 +81,13 @@ export default function LoginPage() {
                   id="email"
                   type="email"
                   value={email}
+                  disabled={isPending}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="seu.email@empresa.com.br"
                   required
                   autoComplete="email"
-                  className="h-10 text-sm"
+                  maxLength={150}
+                  className="h-10 text-sm disabled:opacity-60"
                 />
               </div>
 
@@ -96,25 +97,45 @@ export default function LoginPage() {
                     <Lock className="w-3.5 h-3.5 text-[#0D9488]" /> Senha
                   </Label>
                 </div>
-                <Input
-                  id="password"
-                  type="password"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="••••••••"
-                  required
-                  autoComplete="current-password"
-                  className="h-10 text-sm"
-                />
+                <div className="relative">
+                  <Input
+                    id="password"
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    disabled={isPending}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="••••••••"
+                    required
+                    autoComplete="current-password"
+                    maxLength={128}
+                    className="h-10 text-sm pr-10 disabled:opacity-60 font-mono tracking-wider"
+                  />
+                  <button
+                    type="button"
+                    tabIndex={-1}
+                    onClick={() => setShowPassword(!showPassword)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 transition-colors p-1"
+                    title={showPassword ? 'Ocultar senha' : 'Ver senha'}
+                  >
+                    {showPassword ? (
+                      <EyeOff className="w-4 h-4" />
+                    ) : (
+                      <Eye className="w-4 h-4" />
+                    )}
+                  </button>
+                </div>
               </div>
 
               <Button
                 type="submit"
                 disabled={isPending}
-                className="w-full h-11 bg-[#0F172A] hover:bg-[#1E293B] text-white text-sm font-semibold rounded-[6px] flex items-center justify-center gap-2 shadow-sm transition-all mt-2"
+                className="w-full h-11 bg-[#0F172A] hover:bg-[#1E293B] text-white text-sm font-semibold rounded-[6px] flex items-center justify-center gap-2 shadow-sm transition-all mt-2 disabled:opacity-75"
               >
                 {isPending ? (
-                  <span>Autenticando...</span>
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-teal-400" />
+                    <span>Autenticando...</span>
+                  </>
                 ) : (
                   <>
                     <span>Entrar no Sistema</span>
@@ -135,3 +156,4 @@ export default function LoginPage() {
     </div>
   )
 }
+

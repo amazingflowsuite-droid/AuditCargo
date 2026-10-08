@@ -3,10 +3,10 @@ import { requireAuth } from "@/utils/supabase/auth"
 import { BranchManager } from "./BranchManager"
 
 export default async function FiliaisPage() {
-  const [currentUser, branches, companies] = await Promise.all([
-    requireAuth(),
-    getBranches(),
-    getCompanies(),
+  const currentUser = await requireAuth()
+  const [branches, companies] = await Promise.all([
+    getBranches(currentUser.organization_id),
+    getCompanies(currentUser.organization_id),
   ])
 
   return (

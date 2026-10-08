@@ -3,10 +3,10 @@ import { requireAuth } from "@/utils/supabase/auth"
 import { SenderManager } from "./SenderManager"
 
 export default async function RemetentesPage() {
-  const [currentUser, senders, companies] = await Promise.all([
-    requireAuth(),
-    getSenders(),
-    getCompanies(),
+  const currentUser = await requireAuth()
+  const [senders, companies] = await Promise.all([
+    getSenders(currentUser.organization_id),
+    getCompanies(currentUser.organization_id),
   ])
 
   return (

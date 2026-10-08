@@ -19,7 +19,16 @@ export default async function DriverTripPage({
   const { data: trip } = await supabase
     .from("trips")
     .select(`
-      *,
+      id,
+      token,
+      status,
+      destination,
+      sender,
+      cte_number,
+      invoices,
+      arrival_time,
+      completion_time,
+      checkin_photo_url,
       companies(name),
       branches(name, city, email),
       drivers(name, default_plate, phone)
@@ -31,8 +40,15 @@ export default async function DriverTripPage({
     notFound()
   }
 
+  const tripData = trip as any
+  const driverName = (Array.isArray(tripData.drivers) ? tripData.drivers[0]?.name : tripData.drivers?.name) || 'Motorista'
+  const driverPlate = (Array.isArray(tripData.drivers) ? tripData.drivers[0]?.default_plate : tripData.drivers?.default_plate) || 'N/A'
+  const branchName = Array.isArray(tripData.branches) ? tripData.branches[0]?.name : tripData.branches?.name
+  const companyName = Array.isArray(tripData.companies) ? tripData.companies[0]?.name : tripData.companies?.name
+  const branchLabel = branchName ? `${branchName} (${companyName || ''})` : (companyName || '')
+
   if (!isAuthorized) {
-    return <PinAuth token={token.toUpperCase()} driverName={trip.drivers?.name || 'Motorista'} />
+    return <PinAuth token={token.toUpperCase()} driverName={driverName} />
   }
 
   // Mapeamento amigável de status em Português
@@ -94,12 +110,12 @@ export default async function DriverTripPage({
           </CardDescription>
           <CardTitle className="text-xl font-bold flex items-center gap-2">
             <Truck className="w-5 h-5 text-[#0D9488]" />
-            {trip.drivers?.name}
+            {driverName}
           </CardTitle>
         </CardHeader>
         <CardContent className="p-4 pt-1 text-xs text-[#57534E] flex items-center justify-between font-mono">
-          <span>Placa: <strong>{trip.drivers?.default_plate || "N/A"}</strong></span>
-          <span>{trip.branches?.name ? `${trip.branches.name} (${trip.companies?.name || ''})` : trip.companies?.name}</span>
+          <span>Placa: <strong>{driverPlate}</strong></span>
+          <span>{branchLabel}</span>
         </CardContent>
       </Card>
 

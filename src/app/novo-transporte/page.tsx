@@ -3,13 +3,15 @@ import { requireAuth } from "@/utils/supabase/auth"
 import { NewTransportForm } from "./NewTransportForm"
 
 export default async function NovoTransportePage() {
-  const [currentUser, companies, branches, drivers, senders, recipients] = await Promise.all([
-    requireAuth(),
-    getCompanies(),
-    getBranches(),
-    getDrivers(),
-    getSenders(),
-    getRecipients(),
+  const currentUser = await requireAuth()
+  const orgId = currentUser.organization_id
+
+  const [companies, branches, drivers, senders, recipients] = await Promise.all([
+    getCompanies(orgId),
+    getBranches(orgId),
+    getDrivers(orgId),
+    getSenders(orgId),
+    getRecipients(undefined, orgId),
   ])
 
   return (

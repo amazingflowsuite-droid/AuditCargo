@@ -19,6 +19,7 @@ export interface ArrivalEmailData {
   serviceType?: string
   sender?: string
   companyInfo?: CompanyInfo
+  checkinPhotoUrl?: string | null
   notes?: string
   extraCc?: string[]
 }
@@ -167,16 +168,24 @@ export function generateArrivalEmailHtml(data: ArrivalEmailData): string {
       font-size: 14px;
       color: #334155;
     }
-    .sig-name {
-      font-size: 17px;
-      font-weight: bold;
-      color: #0f172a;
-      margin-bottom: 2px;
+    .photo-box {
+      margin-top: 20px;
+      margin-bottom: 25px;
+      padding: 14px;
+      background-color: #f8fafc;
+      border: 1px solid #e2e8f0;
+      border-radius: 6px;
     }
-    .sig-role {
+    .photo-btn {
+      display: inline-block;
+      padding: 8px 16px;
+      background-color: #0d9488;
+      color: #ffffff !important;
+      text-decoration: none;
+      font-weight: bold;
       font-size: 13px;
-      color: #64748b;
-      margin-bottom: 8px;
+      border-radius: 4px;
+      margin-top: 6px;
     }
     .sig-brand {
       display: inline-block;
@@ -231,10 +240,23 @@ export function generateArrivalEmailHtml(data: ArrivalEmailData): string {
       </tbody>
     </table>
 
+    ${data.checkinPhotoUrl ? `
+    <div class="photo-box">
+      <div style="font-size: 13px; font-weight: bold; color: #1e293b;">Comprovante / Registro de Portaria:</div>
+      <p style="font-size: 12px; color: #64748b; margin: 4px 0 8px 0;">O motorista registrou a imagem comprobatória no momento da chegada ao destino.</p>
+      ${data.checkinPhotoUrl.startsWith('http') ? `
+      <a href="${data.checkinPhotoUrl}" target="_blank" class="photo-btn">
+        📷 Visualizar Foto Comprobatória
+      </a>
+      ` : `
+      <div style="display: inline-block; padding: 6px 12px; background-color: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 12px; color: #334155; font-weight: 500; margin-top: 4px;">
+        📎 Arquivo anexado a esta mensagem (comprovante-chegada.jpg)
+      </div>
+      `}
+    </div>
+    ` : ''}
+
     <div class="signature">
-      <div class="sig-name">${comp?.contact || 'Atendimento Operacional'}</div>
-      <div class="sig-role">Operações de Transporte & Telemetria Portuária</div>
-      
       <div class="sig-brand">
         ${comp?.name || 'AuditCargo'}
       </div>
@@ -343,17 +365,6 @@ export function generateCompletionEmailHtml(data: CompletionEmailData): string {
       font-size: 14px;
       color: #334155;
     }
-    .sig-name {
-      font-size: 17px;
-      font-weight: bold;
-      color: #0f172a;
-      margin-bottom: 2px;
-    }
-    .sig-role {
-      font-size: 13px;
-      color: #64748b;
-      margin-bottom: 8px;
-    }
     .sig-brand {
       display: inline-block;
       font-size: 20px;
@@ -411,16 +422,19 @@ export function generateCompletionEmailHtml(data: CompletionEmailData): string {
     <div class="photo-box">
       <div style="font-size: 13px; font-weight: bold; color: #1e293b;">Comprovante / Registro de Portaria:</div>
       <p style="font-size: 12px; color: #64748b; margin: 4px 0 8px 0;">O motorista registrou a imagem comprobatória no momento da operação.</p>
+      ${data.checkinPhotoUrl.startsWith('http') ? `
       <a href="${data.checkinPhotoUrl}" target="_blank" class="photo-btn">
         📷 Visualizar Foto Comprobatória
       </a>
+      ` : `
+      <div style="display: inline-block; padding: 6px 12px; background-color: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 4px; font-size: 12px; color: #334155; font-weight: 500; margin-top: 4px;">
+        📎 Arquivo anexado a esta mensagem (comprovante-entrega.jpg)
+      </div>
+      `}
     </div>
     ` : ''}
 
     <div class="signature">
-      <div class="sig-name">${comp?.contact || 'Atendimento Operacional'}</div>
-      <div class="sig-role">Operações de Transporte & Telemetria Portuária</div>
-      
       <div class="sig-brand">
         ${comp?.name || 'AuditCargo'}
       </div>
@@ -436,6 +450,30 @@ export function generateCompletionEmailHtml(data: CompletionEmailData): string {
 </body>
 </html>
 `
+}
+
+function isSafePublicAttachmentUrl(urlStr: string): boolean {
+  try {
+    const parsed = new URL(urlStr)
+    if (parsed.protocol !== 'https:') return false
+    const hostname = parsed.hostname.toLowerCase()
+    // Prevenção Anti-SSRF: Rejeita loopback, redes privadas e metadados locais de nuvem
+    if (
+      hostname === 'localhost' ||
+      hostname === '127.0.0.1' ||
+      hostname.startsWith('192.168.') ||
+      hostname.startsWith('10.') ||
+      hostname.startsWith('172.16.') ||
+      hostname === '169.254.169.254' ||
+      hostname.endsWith('.internal') ||
+      hostname.endsWith('.local')
+    ) {
+      return false
+    }
+    return true
+  } catch {
+    return false
+  }
 }
 
 function resolveCcList(extraCc?: string[]): string[] | undefined {
@@ -531,6 +569,33 @@ export async function sendArrivalEmail(data: ArrivalEmailData): Promise<{
 
     if (data.companyInfo?.email) {
       mailOptions.replyTo = data.companyInfo.email
+    }
+
+    // Se houver foto, anexa ao e-mail (suporta Data URL base64 e URLs HTTPS seguras)
+    if (data.checkinPhotoUrl) {
+      if (data.checkinPhotoUrl.startsWith('data:image/')) {
+        const commaIdx = data.checkinPhotoUrl.indexOf(',')
+        if (commaIdx !== -1) {
+          const mimeMatch = data.checkinPhotoUrl.match(/data:(image\/[a-zA-Z+]+);base64/)
+          const contentType = mimeMatch ? mimeMatch[1] : 'image/jpeg'
+          const ext = contentType.includes('png') ? 'png' : contentType.includes('webp') ? 'webp' : 'jpg'
+          const base64Data = data.checkinPhotoUrl.slice(commaIdx + 1)
+          mailOptions.attachments = [
+            {
+              filename: `comprovante-chegada.${ext}`,
+              content: Buffer.from(base64Data, 'base64'),
+              contentType,
+            },
+          ]
+        }
+      } else if (isSafePublicAttachmentUrl(data.checkinPhotoUrl)) {
+        mailOptions.attachments = [
+          {
+            filename: 'comprovante-chegada.jpg',
+            path: data.checkinPhotoUrl,
+          },
+        ]
+      }
     }
 
     const info = await transporter.sendMail(mailOptions)
@@ -631,14 +696,31 @@ export async function sendCompletionEmail(data: CompletionEmailData): Promise<{
       mailOptions.replyTo = data.companyInfo.email
     }
 
-    // Se houver foto e for uma URL pública válida, podemos anexar
-    if (data.checkinPhotoUrl && data.checkinPhotoUrl.startsWith('http')) {
-      mailOptions.attachments = [
-        {
-          filename: 'comprovante-entrega.jpg',
-          path: data.checkinPhotoUrl,
-        },
-      ]
+    // Se houver foto, anexa ao e-mail (suporta Data URL base64 e URLs HTTPS seguras)
+    if (data.checkinPhotoUrl) {
+      if (data.checkinPhotoUrl.startsWith('data:image/')) {
+        const commaIdx = data.checkinPhotoUrl.indexOf(',')
+        if (commaIdx !== -1) {
+          const mimeMatch = data.checkinPhotoUrl.match(/data:(image\/[a-zA-Z+]+);base64/)
+          const contentType = mimeMatch ? mimeMatch[1] : 'image/jpeg'
+          const ext = contentType.includes('png') ? 'png' : contentType.includes('webp') ? 'webp' : 'jpg'
+          const base64Data = data.checkinPhotoUrl.slice(commaIdx + 1)
+          mailOptions.attachments = [
+            {
+              filename: `comprovante-entrega.${ext}`,
+              content: Buffer.from(base64Data, 'base64'),
+              contentType,
+            },
+          ]
+        }
+      } else if (isSafePublicAttachmentUrl(data.checkinPhotoUrl)) {
+        mailOptions.attachments = [
+          {
+            filename: 'comprovante-entrega.jpg',
+            path: data.checkinPhotoUrl,
+          },
+        ]
+      }
     }
 
     const info = await transporter.sendMail(mailOptions)

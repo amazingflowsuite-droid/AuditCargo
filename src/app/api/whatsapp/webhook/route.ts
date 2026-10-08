@@ -6,8 +6,30 @@ import {
   normalizeWhatsAppNumber,
 } from '@/utils/whatsapp'
 import { sendArrivalEmail } from '@/utils/mailer'
+import crypto from 'crypto'
 
 export const dynamic = 'force-dynamic'
+
+/**
+ * Validação criptográfica da assinatura da Meta (HMAC-SHA256)
+ */
+function verifyMetaSignature(rawBody: string, signatureHeader: string | null, appSecret: string): boolean {
+  if (!signatureHeader || !signatureHeader.startsWith('sha256=')) {
+    return false
+  }
+  const signatureHex = signatureHeader.slice(7)
+  const expectedHash = crypto.createHmac('sha256', appSecret).update(rawBody).digest('hex')
+  try {
+    const signatureBuffer = Buffer.from(signatureHex, 'hex')
+    const expectedBuffer = Buffer.from(expectedHash, 'hex')
+    if (signatureBuffer.length !== expectedBuffer.length) {
+      return false
+    }
+    return crypto.timingSafeEqual(signatureBuffer, expectedBuffer)
+  } catch {
+    return false
+  }
+}
 
 /**
  * GET: Validação do Webhook pela Meta
@@ -38,7 +60,19 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json()
+    const rawBody = await request.text()
+
+    // Validação criptográfica da assinatura da Meta se WHATSAPP_APP_SECRET configurado
+    const appSecret = process.env.WHATSAPP_APP_SECRET || process.env.META_APP_SECRET
+    if (appSecret) {
+      const signatureHeader = request.headers.get('x-hub-signature-256')
+      if (!verifyMetaSignature(rawBody, signatureHeader, appSecret)) {
+        console.warn('⚠️ [WhatsApp Webhook] Assinatura X-Hub-Signature-256 inválida ou ausente.')
+        return new Response('Unauthorized', { status: 401 })
+      }
+    }
+
+    const body = JSON.parse(rawBody)
 
     // Valida se o payload é da conta do WhatsApp Business
     if (body.object !== 'whatsapp_business_account') {
@@ -95,8 +129,8 @@ export async function POST(request: NextRequest) {
       const text = (message.text?.body || '').trim()
       const textUpper = text.toUpperCase()
 
-      // Caso o motorista tenha digitado o Token da viagem (ex: ZNGG4J)
-      if (textUpper.length === 6 && /^[A-Z0-9]{6}$/.test(textUpper)) {
+      // Caso o motorista tenha digitado o Token da viagem (ex: ZNGG4J ou 8-hex F3A8B1C2)
+      if (textUpper.length >= 6 && textUpper.length <= 8 && /^[A-Z0-9]{6,8}$/.test(textUpper)) {
         const trip = await findTripByToken(textUpper)
         if (trip) {
           await sendTripWhatsAppPrompt({
@@ -140,7 +174,7 @@ export async function POST(request: NextRequest) {
           from,
           '👋 Olá! Sou o assistente automático do *AuditCargo*.\n\n' +
             'Não localizamos nenhuma viagem em andamento para este número de telefone.\n\n' +
-            '💡 Se você recebeu um código da viagem (Token de 6 caracteres, ex: *ZNGG4J*), digite-o aqui para iniciar o acompanhamento.'
+            '💡 Se você recebeu um código da viagem (Token de 6 a 8 caracteres, ex: *ZNGG4J*), digite-o aqui para iniciar o acompanhamento.'
         )
       }
     }
@@ -161,7 +195,54 @@ async function handleArrivedAction(tripId: string, driverPhone: string) {
   const now = new Date()
 
   try {
-    // Atualiza status e arrival_time caso não esteja finalizada
+    // 1. Busca os dados da viagem e do motorista escalado para validação de autorização (Anti-BOLA/IDOR)
+    const checkRes = await pool.query(
+      `
+      SELECT t.*, d.name as driver_name, d.phone as driver_phone
+      FROM trips t
+      LEFT JOIN drivers d ON t.driver_id = d.id
+      WHERE t.id = $1 AND t.status != 'finished'
+      LIMIT 1
+      `,
+      [tripId]
+    )
+
+    if (checkRes.rows.length === 0) {
+      await sendWhatsAppTextMessage(
+        driverPhone,
+        'ℹ️ Esta viagem já foi finalizada ou não pôde ser atualizada.'
+      )
+      return
+    }
+
+    const tripData = checkRes.rows[0]
+
+    // Valida se o telefone remetente corresponde ao motorista escalado
+    const cleanFrom = driverPhone.replace(/\D/g, '')
+    const cleanDriver = (tripData.driver_phone || '').replace(/\D/g, '')
+    const fromSuffix = cleanFrom.slice(-8)
+    const driverSuffix = cleanDriver.slice(-8)
+
+    const isAuthorized = Boolean(
+      fromSuffix &&
+        driverSuffix &&
+        (fromSuffix === driverSuffix ||
+          cleanFrom.endsWith(driverSuffix) ||
+          cleanDriver.endsWith(fromSuffix))
+    )
+
+    if (!isAuthorized) {
+      console.warn(
+        `⚠️ [WhatsApp Webhook] Tentativa não autorizada de marcar chegada na viagem ${tripId} pelo telefone ${driverPhone}`
+      )
+      await sendWhatsAppTextMessage(
+        driverPhone,
+        '⚠️ Este número de WhatsApp não corresponde ao motorista escalado para esta viagem.'
+      )
+      return
+    }
+
+    // 2. Atualiza status e arrival_time caso não esteja finalizada
     const updateRes = await pool.query(
       `
       UPDATE trips
@@ -221,6 +302,7 @@ async function handleArrivedAction(tripId: string, driverPhone: string) {
           destinationCity: destCity,
           arrivalTime: now.toISOString(),
           invoices: trip.invoices || [],
+          checkinPhotoUrl: trip.checkin_photo_url,
         })
       }
     } catch (emailErr) {

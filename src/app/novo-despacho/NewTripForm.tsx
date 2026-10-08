@@ -1,12 +1,12 @@
 'use client'
 
-import { useState, useTransition, useEffect } from 'react'
+import { useState, useTransition, useEffect, useMemo } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { createTrip } from "../actions"
-import { Truck, MapPin, Building2, CheckCircle2, MessageSquare, Copy, ArrowRight } from "lucide-react"
+import { Truck, MapPin, Building2, CheckCircle2, MessageSquare, Copy, ArrowRight, AlertCircle } from "lucide-react"
 
 export function NewTripForm({
   companies,
@@ -24,10 +24,18 @@ export function NewTripForm({
   const [result, setResult] = useState<any | null>(null)
   const [copied, setCopied] = useState(false)
 
-  // Filter branches and drivers by selected company
-  const filteredBranches = branches.filter((b) => !selectedCompanyId || b.company_id === selectedCompanyId)
-  const filteredDrivers = drivers.filter((d) => !selectedCompanyId || d.company_id === selectedCompanyId)
-  const currentDriver = drivers.find((d) => d.id === selectedDriverId)
+  // Filter branches and drivers by selected company memoizados
+  const filteredBranches = useMemo(() => {
+    return branches.filter((b) => !selectedCompanyId || b.company_id === selectedCompanyId)
+  }, [branches, selectedCompanyId])
+
+  const filteredDrivers = useMemo(() => {
+    return drivers.filter((d) => !selectedCompanyId || d.company_id === selectedCompanyId)
+  }, [drivers, selectedCompanyId])
+
+  const currentDriver = useMemo(() => {
+    return drivers.find((d) => d.id === selectedDriverId)
+  }, [drivers, selectedDriverId])
 
   // Auto-seleciona a primeira filial disponível
   useEffect(() => {
@@ -157,8 +165,9 @@ export function NewTripForm({
         ) : (
           <form action={handleSubmit} className="space-y-5">
             {result?.error && (
-              <div className="p-3 bg-red-100 text-red-800 rounded-[6px] text-xs font-medium">
-                Erro ao gerar despacho: {result.error}
+              <div className="p-3 bg-red-50 text-red-800 rounded-[6px] text-xs font-medium border border-red-200 flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                <span>Erro ao gerar despacho: {result.error}</span>
               </div>
             )}
 

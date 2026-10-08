@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo, useTransition, useEffect } from 'react'
+import { useState, useMemo, useTransition, useEffect, memo } from 'react'
 import Link from 'next/link'
 import {
   Truck,
@@ -21,11 +21,31 @@ import {
   User,
   Bot,
   Loader2,
+  ChevronLeft,
+  ChevronRight,
+  Copy,
+  ExternalLink,
+  Send,
 } from 'lucide-react'
-import { updateTrip, cancelTrip, deleteTrip, sendWhatsAppTripStatusPromptAction } from '@/app/actions'
+import {
+  updateTrip,
+  cancelTrip,
+  deleteTrip,
+  sendWhatsAppTripStatusPromptAction,
+  sendTelegramTripStatusPromptAction,
+} from '@/app/actions'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+
+// Ícone oficial Telegram vetorial
+export function TelegramIcon({ className = "w-4 h-4" }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" className={className} aria-hidden="true">
+      <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" />
+    </svg>
+  )
+}
 
 // Ícone oficial WhatsApp vetorial
 export function WhatsAppIcon({ className = "w-4 h-4" }: { className?: string }) {
@@ -67,13 +87,9 @@ export function TripsDashboardTable({
 
   // Estado para Edição
   const [editingTrip, setEditingTrip] = useState<any | null>(null)
-  const [editCte, setEditCte] = useState('')
-  const [editServiceType, setEditServiceType] = useState('Estadia')
-  const [editSender, setEditSender] = useState('')
-  const [editDestination, setEditDestination] = useState('')
-  const [editInvoices, setEditInvoices] = useState('')
-  const [editDriverId, setEditDriverId] = useState('')
-  const [editStatus, setEditStatus] = useState('in_transit')
+
+  // Feedback de Ações (Edição, Cancelamento, Exclusão)
+  const [tableFeedback, setTableFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
 
   // Estado para Cancelamento / Exclusão
   const [actionTrip, setActionTrip] = useState<any | null>(null)
@@ -81,6 +97,61 @@ export function TripsDashboardTable({
   // Estado para Bot Meta WhatsApp
   const [sendingBotTripId, setSendingBotTripId] = useState<string | null>(null)
   const [botFeedback, setBotFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+
+  // Estado para Telegram Bot
+  const [sendingTelegramTripId, setSendingTelegramTripId] = useState<string | null>(null)
+  const [telegramModalTrip, setTelegramModalTrip] = useState<{
+    id: string
+    token: string
+    destination: string
+    driverName?: string
+    isLinked: boolean
+    telegramLink: string
+  } | null>(null)
+  const [telegramCopied, setTelegramCopied] = useState(false)
+
+  const handleSendTelegramPrompt = async (trip: any) => {
+    const isLinked = Boolean(trip.telegram_chat_id || trip.drivers?.telegram_chat_id)
+    const deepLink = `https://t.me/AuditCargo_bot?start=trip_${trip.token}`
+
+    if (isLinked) {
+      setSendingTelegramTripId(trip.id)
+      setBotFeedback(null)
+      try {
+        const res = await sendTelegramTripStatusPromptAction(trip.id)
+        if (res.success) {
+          setBotFeedback({
+            type: 'success',
+            message: 'Mensagem de acompanhamento enviada com sucesso no Telegram do motorista!',
+          })
+        } else {
+          setBotFeedback({
+            type: 'error',
+            message: res.error || 'Erro ao enviar mensagem via Telegram.',
+          })
+        }
+      } catch (err: any) {
+        setBotFeedback({
+          type: 'error',
+          message: err?.message || 'Erro inesperado na chamada do Telegram.',
+        })
+      } finally {
+        setSendingTelegramTripId(null)
+        setTimeout(() => setBotFeedback(null), 7000)
+      }
+    } else {
+      // Abre modal com o link e QR/botão de vincular
+      setTelegramModalTrip({
+        id: trip.id,
+        token: trip.token,
+        destination: trip.destination,
+        driverName: trip.drivers?.name,
+        isLinked: false,
+        telegramLink: deepLink,
+      })
+      setTelegramCopied(false)
+    }
+  }
 
   const handleSendBotPrompt = async (tripId: string) => {
     setSendingBotTripId(tripId)
@@ -147,6 +218,21 @@ export function TripsDashboardTable({
     })
   }, [trips, activeTab, searchTerm])
 
+  // Paginação de alta performance (15 itens por página para manter DOM leve)
+  const [currentPage, setCurrentPage] = useState(1)
+  const ITEMS_PER_PAGE = 15
+
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [activeTab, searchTerm])
+
+  const totalPages = Math.ceil(filteredTrips.length / ITEMS_PER_PAGE) || 1
+
+  const paginatedTrips = useMemo(() => {
+    const start = (currentPage - 1) * ITEMS_PER_PAGE
+    return filteredTrips.slice(start, start + ITEMS_PER_PAGE)
+  }, [filteredTrips, currentPage])
+
   const formatShortDateTime = (dateStr: string) => {
     const d = new Date(dateStr)
     return `${d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} às ${d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
@@ -190,41 +276,32 @@ export function TripsDashboardTable({
 
   const openEditModal = (trip: any) => {
     setEditingTrip(trip)
-    setEditCte(trip.cte_number || '')
-    setEditServiceType(trip.service_type || 'Estadia')
-    setEditSender(trip.sender || '')
-    setEditDestination(trip.destination || '')
-    setEditInvoices(Array.isArray(trip.invoices) ? trip.invoices.join(', ') : '')
-    setEditDriverId(trip.driver_id || '')
-    setEditStatus(trip.status || 'in_transit')
   }
 
-  const handleSaveEdit = async (e: React.FormEvent) => {
-    e.preventDefault()
+  const handleSaveEdit = async (payload: {
+    cte_number: string
+    service_type: string
+    sender: string
+    destination: string
+    invoices: string[]
+    driver_id?: string
+    status: string
+  }) => {
     if (!editingTrip) return
 
-    const parsedInvoices = editInvoices
-      .split(',')
-      .map((i) => i.trim())
-      .filter(Boolean)
-
-    startTransition(async () => {
-      const res = await updateTrip(editingTrip.id, {
-        cte_number: editCte,
-        service_type: editServiceType,
-        sender: editSender,
-        destination: editDestination,
-        invoices: parsedInvoices,
-        driver_id: editDriverId || undefined,
-        status: editStatus,
+    return new Promise<void>((resolve, reject) => {
+      startTransition(async () => {
+        const res = await updateTrip(editingTrip.id, payload)
+        if (res.success && res.data) {
+          setTrips((prev) => prev.map((t) => (t.id === editingTrip.id ? res.data : t)))
+          setEditingTrip(null)
+          setTableFeedback({ type: 'success', message: `Transporte #${editingTrip.token} atualizado com sucesso!` })
+          setTimeout(() => setTableFeedback(null), 5000)
+          resolve()
+        } else {
+          reject(new Error(res.error || 'Erro ao atualizar transporte.'))
+        }
       })
-
-      if (res.success && res.data) {
-        setTrips((prev) => prev.map((t) => (t.id === editingTrip.id ? res.data : t)))
-        setEditingTrip(null)
-      } else {
-        alert('Erro ao atualizar transporte: ' + (res.error || 'Erro desconhecido'))
-      }
     })
   }
 
@@ -234,8 +311,10 @@ export function TripsDashboardTable({
       if (res.success && res.data) {
         setTrips((prev) => prev.map((t) => (t.id === tripId ? { ...t, status: 'cancelled' } : t)))
         setActionTrip(null)
+        setTableFeedback({ type: 'success', message: 'Transporte cancelado com sucesso.' })
+        setTimeout(() => setTableFeedback(null), 5000)
       } else {
-        alert('Erro ao cancelar: ' + (res.error || 'Erro desconhecido'))
+        setTableFeedback({ type: 'error', message: 'Erro ao cancelar: ' + (res.error || 'Erro desconhecido') })
       }
     })
   }
@@ -246,8 +325,10 @@ export function TripsDashboardTable({
       if (res.success) {
         setTrips((prev) => prev.filter((t) => t.id !== tripId))
         setActionTrip(null)
+        setTableFeedback({ type: 'success', message: 'Transporte excluído definitivamente.' })
+        setTimeout(() => setTableFeedback(null), 5000)
       } else {
-        alert('Erro ao excluir: ' + (res.error || 'Erro desconhecido'))
+        setTableFeedback({ type: 'error', message: 'Erro ao excluir: ' + (res.error || 'Erro desconhecido') })
       }
     })
   }
@@ -364,6 +445,33 @@ export function TripsDashboardTable({
         </div>
       </div>
 
+      {/* Banner de Feedback de Operação (Tabela) */}
+      {tableFeedback && (
+        <div
+          className={`p-3 rounded-[6px] text-xs font-mono flex items-center justify-between border animate-in fade-in duration-150 ${
+            tableFeedback.type === 'success'
+              ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+              : 'bg-red-50 text-red-800 border-red-200'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            {tableFeedback.type === 'success' ? (
+              <Check className="w-4 h-4 shrink-0 text-emerald-600" />
+            ) : (
+              <AlertCircle className="w-4 h-4 shrink-0 text-red-600" />
+            )}
+            <span>{tableFeedback.message}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setTableFeedback(null)}
+            className="text-stone-400 hover:text-stone-700 ml-3"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Banner de Feedback do Bot WhatsApp */}
       {botFeedback && (
         <div
@@ -422,15 +530,17 @@ export function TripsDashboardTable({
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E7E5E4]">
-                {filteredTrips.map((trip: any) => {
+                {paginatedTrips.map((trip: any) => {
                   const statusBadge = getStatusBadge(trip.status)
 
                   const whatsappUrl = trip.drivers?.phone
                     ? `https://wa.me/55${trip.drivers.phone.replace(/\D/g, '')}?text=${encodeURIComponent(
-                        `🚚 *AuditCargo* - CT-e ${trip.cte_number || ''} (${trip.service_type || 'Estadia'})\n` +
-                          `Motorista: ${trip.drivers?.name || ''}\n` +
-                          `Destino: ${trip.destination}\n\n` +
-                          `📲 *Acesse o link do transporte:*\n${origin ? `${origin}/v/${trip.token}` : `/v/${trip.token}`}`
+                        `Olá, *${trip.drivers?.name?.split(' ')[0] || 'Motorista'}*! 👋\n\n` +
+                        `Sua viagem para *${trip.destination}* está registrada no AuditCargo. 🚚\n` +
+                        (trip.cte_number ? `CT-e: ${trip.cte_number} | ` : '') + `Serviço: ${trip.service_type || 'Estadia'}\n\n` +
+                        `Para informar sua chegada e saída/descarga, acesse seu painel pelo link abaixo:\n` +
+                        `🔗 ${origin ? `${origin}/v/${trip.token}` : `/v/${trip.token}`}\n\n` +
+                        `Boa viagem e dirija com segurança! 🛣️`
                       )}`
                     : null
 
@@ -497,7 +607,7 @@ export function TripsDashboardTable({
                           </div>
                         )}
 
-                        {trip.checkin_photo_url && (
+                        {trip.checkin_photo_url && (trip.checkin_photo_url.startsWith('http://') || trip.checkin_photo_url.startsWith('https://')) && (
                           <div className="mt-1.5">
                             <a
                               href={trip.checkin_photo_url}
@@ -511,6 +621,36 @@ export function TripsDashboardTable({
                             </a>
                           </div>
                         )}
+
+                        {trip.delivery_receipt_url && (
+                          <div className="mt-1">
+                            <a
+                              href={trip.delivery_receipt_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-[11px] font-mono text-[#0284C7] hover:underline"
+                              title="Canhoto / Comprovante recebido via Telegram"
+                            >
+                              <FileText className="w-3 h-3 shrink-0" />
+                              <span>Canhoto (Telegram)</span>
+                            </a>
+                          </div>
+                        )}
+
+                        {trip.last_driver_latitude && trip.last_driver_longitude && (
+                          <div className="mt-1">
+                            <a
+                              href={`https://www.google.com/maps?q=${trip.last_driver_latitude},${trip.last_driver_longitude}`}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-[11px] font-mono text-emerald-700 hover:underline"
+                              title="Ver localização GPS do motorista no mapa"
+                            >
+                              <MapPin className="w-3 h-3 shrink-0" />
+                              <span>GPS: {Number(trip.last_driver_latitude).toFixed(3)}, {Number(trip.last_driver_longitude).toFixed(3)}</span>
+                            </a>
+                          </div>
+                        )}
                       </td>
 
                       <td className="px-4 py-4">
@@ -521,7 +661,7 @@ export function TripsDashboardTable({
                         </span>
                       </td>
 
-                      {/* COLUNA: AÇÕES (WHATSAPP, LINK, EDITAR, CANCELAR) */}
+                      {/* COLUNA: AÇÕES (WHATSAPP, TELEGRAM, LINK, EDITAR, CANCELAR) */}
                       <td className="px-4 py-4 text-right">
                         <div className="flex items-center justify-end gap-1.5">
                           {/* Botão WhatsApp */}
@@ -554,6 +694,29 @@ export function TripsDashboardTable({
                               )}
                             </button>
                           )}
+
+                          {/* Botão Telegram Bot (Canal Alternativo e Contingência) */}
+                          <button
+                            type="button"
+                            disabled={sendingTelegramTripId === trip.id}
+                            onClick={() => handleSendTelegramPrompt(trip)}
+                            className={`inline-flex items-center justify-center p-2 rounded-[6px] transition-all shadow-2xs border ${
+                              (trip.telegram_chat_id || trip.drivers?.telegram_chat_id)
+                                ? 'bg-[#229ED9]/15 text-[#229ED9] border-[#229ED9]/40 hover:bg-[#229ED9] hover:text-white'
+                                : 'bg-[#F0F9FF] text-[#0284C7] border-[#BAE6FD] hover:bg-[#0284C7] hover:text-white'
+                            } disabled:opacity-50`}
+                            title={
+                              (trip.telegram_chat_id || trip.drivers?.telegram_chat_id)
+                                ? 'Telegram Conectado: Disparar cobrança de status via Telegram Bot'
+                                : 'Vincular / Disparar via Telegram Bot'
+                            }
+                          >
+                            {sendingTelegramTripId === trip.id ? (
+                              <Loader2 className="w-4 h-4 animate-spin text-[#229ED9]" />
+                            ) : (
+                              <TelegramIcon className="w-4 h-4" />
+                            )}
+                          </button>
 
                           {/* Link Motorista (Apenas Administrador) */}
                           {isAdmin && (
@@ -596,145 +759,60 @@ export function TripsDashboardTable({
               </tbody>
             </table>
           </div>
-        </div>
-      )}
 
-      {/* MODAL DE EDIÇÃO DE TRANSPORTE */}
-      {editingTrip && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs animate-in fade-in duration-150">
-          <div className="bg-white rounded-[10px] border border-[#E7E5E4] shadow-2xl max-w-lg w-full overflow-hidden">
-            <div className="flex items-center justify-between px-5 py-3.5 bg-[#F5F5F4] border-b border-[#E7E5E4]">
+          {/* Controles de Paginação */}
+          {filteredTrips.length > 0 && (
+            <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 bg-[#FAFAF9] border border-[#E7E5E4] rounded-[8px] text-xs text-[#57534E]">
+              <div className="font-mono">
+                Exibindo{' '}
+                <strong>{Math.min((currentPage - 1) * ITEMS_PER_PAGE + 1, filteredTrips.length)}</strong> a{' '}
+                <strong>{Math.min(currentPage * ITEMS_PER_PAGE, filteredTrips.length)}</strong> de{' '}
+                <strong>{filteredTrips.length}</strong> transportes
+              </div>
+
               <div className="flex items-center gap-2">
-                <Pencil className="w-4 h-4 text-[#0D9488]" />
-                <h3 className="font-bold text-sm text-[#1C1917]">
-                  Editar Transporte #{editingTrip.token}
-                </h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setEditingTrip(null)}
-                className="text-[#78716C] hover:text-[#1C1917]"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            <form onSubmit={handleSaveEdit} className="p-5 space-y-3.5 max-h-[80vh] overflow-y-auto">
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <Label htmlFor="editCte">CT-e / DACTE</Label>
-                  <Input
-                    id="editCte"
-                    value={editCte}
-                    onChange={(e) => setEditCte(e.target.value)}
-                    placeholder="Ex: 204"
-                  />
-                </div>
-
-                <div className="space-y-1">
-                  <Label htmlFor="editServiceType">Tipo de Serviço</Label>
-                  <select
-                    id="editServiceType"
-                    value={editServiceType}
-                    onChange={(e) => setEditServiceType(e.target.value)}
-                    className="flex h-9 w-full rounded-[6px] border border-[#D6D3D1] bg-[#FAFAF9] px-2.5 text-xs text-[#1C1917]"
-                  >
-                    <option value="Estadia">Estadia</option>
-                    <option value="Descarga">Descarga</option>
-                    <option value="Devolução">Devolução</option>
-                    <option value="Transferência">Transferência</option>
-                    <option value="Coleta">Coleta</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="space-y-1">
-                <Label htmlFor="editStatus">Status da Operação</Label>
-                <select
-                  id="editStatus"
-                  value={editStatus}
-                  onChange={(e) => setEditStatus(e.target.value)}
-                  className="flex h-9 w-full rounded-[6px] border border-[#D6D3D1] bg-[#FAFAF9] px-2.5 text-xs text-[#1C1917] font-medium"
-                >
-                  <option value="in_transit">Em Trânsito (A caminho)</option>
-                  <option value="arrived">Na Portaria (Chegada registrada)</option>
-                  <option value="unloading">Em Descarga (Operação)</option>
-                  <option value="finished">Concluído (Finalizado)</option>
-                  <option value="cancelled">Cancelado</option>
-                </select>
-              </div>
-
-              <div className="space-y-1">
-                <Label htmlFor="editSender">Remetente</Label>
-                <Input
-                  id="editSender"
-                  value={editSender}
-                  onChange={(e) => setEditSender(e.target.value)}
-                  placeholder="Nome do Remetente / Município"
-                />
-              </div>
-
-              <div className="space-y-1">
-                <Label htmlFor="editDestination">Destinatário / Destino *</Label>
-                <Input
-                  id="editDestination"
-                  value={editDestination}
-                  onChange={(e) => setEditDestination(e.target.value)}
-                  placeholder="Nome do Destinatário - Município"
-                  required
-                />
-              </div>
-
-              <div className="space-y-1">
-                <Label htmlFor="editInvoices">Notas Fiscais (separadas por vírgula)</Label>
-                <Input
-                  id="editInvoices"
-                  value={editInvoices}
-                  onChange={(e) => setEditInvoices(e.target.value)}
-                  placeholder="Ex: NF-1020, NF-1021"
-                />
-              </div>
-
-              {drivers.length > 0 && (
-                <div className="space-y-1">
-                  <Label htmlFor="editDriverId">Motorista Designado</Label>
-                  <select
-                    id="editDriverId"
-                    value={editDriverId}
-                    onChange={(e) => setEditDriverId(e.target.value)}
-                    className="flex h-9 w-full rounded-[6px] border border-[#D6D3D1] bg-[#FAFAF9] px-2.5 text-xs text-[#1C1917]"
-                  >
-                    <option value="">Selecione o motorista...</option>
-                    {drivers.map((d) => (
-                      <option key={d.id} value={d.id}>
-                        {d.name} {d.default_plate ? `(${d.default_plate})` : ''}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-              )}
-
-              <div className="flex items-center justify-end gap-2 pt-3 border-t border-[#E7E5E4]">
                 <Button
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => setEditingTrip(null)}
+                  onClick={() => setCurrentPage((p) => Math.max(p - 1, 1))}
+                  disabled={currentPage <= 1}
+                  className="h-8 px-2.5 text-xs gap-1"
                 >
-                  Cancelar
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                  <span>Anterior</span>
                 </Button>
+
+                <span className="font-mono px-2 font-medium">
+                  {currentPage} de {totalPages}
+                </span>
+
                 <Button
-                  type="submit"
+                  type="button"
+                  variant="outline"
                   size="sm"
-                  className="bg-[#0D9488] hover:bg-[#0F766E]"
-                  disabled={isPending}
+                  onClick={() => setCurrentPage((p) => Math.min(p + 1, totalPages))}
+                  disabled={currentPage >= totalPages}
+                  className="h-8 px-2.5 text-xs gap-1"
                 >
-                  {isPending ? 'Salvando...' : 'Salvar Alterações'}
+                  <span>Próximo</span>
+                  <ChevronRight className="w-3.5 h-3.5" />
                 </Button>
               </div>
-            </form>
-          </div>
+            </div>
+          )}
         </div>
+      )}
+
+      {/* MODAL DE EDIÇÃO DE TRANSPORTE (MEMOIZADO) */}
+      {editingTrip && (
+        <EditTripModal
+          trip={editingTrip}
+          drivers={drivers}
+          isPending={isPending}
+          onClose={() => setEditingTrip(null)}
+          onSave={handleSaveEdit}
+        />
       )}
 
       {/* MODAL DE CONFIRMAÇÃO DE CANCELAMENTO OU EXCLUSÃO */}
@@ -793,6 +871,300 @@ export function TripsDashboardTable({
           </div>
         </div>
       )}
+
+      {/* MODAL DE VINCULAÇÃO E DISPARO VIA TELEGRAM BOT */}
+      {telegramModalTrip && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white rounded-[10px] border border-[#E7E5E4] shadow-2xl max-w-md w-full overflow-hidden">
+            <div className="flex items-center justify-between px-5 py-3.5 bg-[#F0F9FF] border-b border-[#BAE6FD]">
+              <div className="flex items-center gap-2 text-[#0284C7]">
+                <TelegramIcon className="w-5 h-5 text-[#229ED9]" />
+                <h3 className="font-bold text-sm text-[#0C4A6E]">
+                  Acompanhamento via Telegram Bot
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setTelegramModalTrip(null)}
+                className="text-[#78716C] hover:text-[#1C1917]"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div>
+                <div className="text-xs text-[#57534E]">Viagem Selecionada:</div>
+                <div className="text-sm font-bold text-[#1C1917] font-mono">
+                  #{telegramModalTrip.token} &bull; {telegramModalTrip.destination}
+                </div>
+                {telegramModalTrip.driverName && (
+                  <div className="text-xs text-[#78716C] mt-0.5">
+                    Motorista: <strong>{telegramModalTrip.driverName}</strong>
+                  </div>
+                )}
+              </div>
+
+              <div className="p-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-[8px] space-y-2.5">
+                <p className="text-xs text-[#334155] leading-relaxed">
+                  Para o motorista interagir com o bot no Telegram, envie o link exclusivo abaixo. Ao clicar em <strong>INICIAR (/start)</strong> no Telegram, o sistema vincula a viagem instantaneamente!
+                </p>
+
+                <div className="flex items-center gap-2">
+                  <Input
+                    readOnly
+                    value={telegramModalTrip.telegramLink}
+                    className="text-xs font-mono h-9 bg-white select-all"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-9 px-3 shrink-0 gap-1.5"
+                    onClick={() => {
+                      navigator.clipboard.writeText(telegramModalTrip.telegramLink)
+                      setTelegramCopied(true)
+                      setTimeout(() => setTelegramCopied(false), 3000)
+                    }}
+                  >
+                    {telegramCopied ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-emerald-600" />
+                        <span className="text-emerald-700 text-xs">Copiado</span>
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-3.5 h-3.5" />
+                        <span className="text-xs">Copiar</span>
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#E7E5E4]">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setTelegramModalTrip(null)}
+                >
+                  Fechar
+                </Button>
+                <a
+                  href={telegramModalTrip.telegramLink}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1.5 h-9 px-3.5 text-xs font-medium rounded-[6px] bg-[#229ED9] text-white hover:bg-[#1E88C7] transition-colors"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  Abrir Telegram
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
+
+interface EditTripModalProps {
+  trip: any
+  drivers: any[]
+  isPending: boolean
+  onClose: () => void
+  onSave: (payload: {
+    cte_number: string
+    service_type: string
+    sender: string
+    destination: string
+    invoices: string[]
+    driver_id?: string
+    status: string
+  }) => Promise<void>
+}
+
+const EditTripModal = memo(function EditTripModal({
+  trip,
+  drivers,
+  isPending,
+  onClose,
+  onSave,
+}: EditTripModalProps) {
+  const [cte, setCte] = useState(trip.cte_number || '')
+  const [serviceType, setServiceType] = useState(trip.service_type || 'Estadia')
+  const [sender, setSender] = useState(trip.sender || '')
+  const [destination, setDestination] = useState(trip.destination || '')
+  const [invoices, setInvoices] = useState(Array.isArray(trip.invoices) ? trip.invoices.join(', ') : '')
+  const [driverId, setDriverId] = useState(trip.driver_id || '')
+  const [status, setStatus] = useState(trip.status || 'in_transit')
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setErrorMsg(null)
+    const parsedInvoices = invoices
+      .split(',')
+      .map((i: string) => i.trim())
+      .filter(Boolean)
+
+    try {
+      await onSave({
+        cte_number: cte,
+        service_type: serviceType,
+        sender,
+        destination,
+        invoices: parsedInvoices,
+        driver_id: driverId || undefined,
+        status,
+      })
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Erro ao atualizar transporte.')
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs animate-in fade-in duration-150">
+      <div className="bg-white rounded-[10px] border border-[#E7E5E4] shadow-2xl max-w-lg w-full overflow-hidden">
+        <div className="flex items-center justify-between px-5 py-3.5 bg-[#F5F5F4] border-b border-[#E7E5E4]">
+          <div className="flex items-center gap-2">
+            <Pencil className="w-4 h-4 text-[#0D9488]" />
+            <h3 className="font-bold text-sm text-[#1C1917]">
+              Editar Transporte #{trip.token}
+            </h3>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-[#78716C] hover:text-[#1C1917]"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {errorMsg && (
+          <div className="mx-5 mt-4 p-2.5 bg-red-50 border border-red-200 text-red-700 text-xs rounded-[6px]">
+            {errorMsg}
+          </div>
+        )}
+
+        <form onSubmit={handleSubmit} className="p-5 space-y-3.5 max-h-[80vh] overflow-y-auto">
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1">
+              <Label htmlFor="editCte">CT-e / DACTE</Label>
+              <Input
+                id="editCte"
+                value={cte}
+                onChange={(e) => setCte(e.target.value)}
+                placeholder="Ex: 204"
+              />
+            </div>
+
+            <div className="space-y-1">
+              <Label htmlFor="editServiceType">Tipo de Serviço</Label>
+              <select
+                id="editServiceType"
+                value={serviceType}
+                onChange={(e) => setServiceType(e.target.value)}
+                className="flex h-9 w-full rounded-[6px] border border-[#D6D3D1] bg-[#FAFAF9] px-2.5 text-xs text-[#1C1917]"
+              >
+                <option value="Estadia">Estadia</option>
+                <option value="Descarga">Descarga</option>
+                <option value="Devolução">Devolução</option>
+                <option value="Transferência">Transferência</option>
+                <option value="Coleta">Coleta</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <Label htmlFor="editStatus">Status da Operação</Label>
+            <select
+              id="editStatus"
+              value={status}
+              onChange={(e) => setStatus(e.target.value)}
+              className="flex h-9 w-full rounded-[6px] border border-[#D6D3D1] bg-[#FAFAF9] px-2.5 text-xs text-[#1C1917] font-medium"
+            >
+              <option value="in_transit">Em Trânsito (A caminho)</option>
+              <option value="arrived">Na Portaria (Chegada registrada)</option>
+              <option value="unloading">Em Descarga (Operação)</option>
+              <option value="finished">Concluído (Finalizado)</option>
+              <option value="cancelled">Cancelado</option>
+            </select>
+          </div>
+
+          <div className="space-y-1">
+            <Label htmlFor="editSender">Remetente</Label>
+            <Input
+              id="editSender"
+              value={sender}
+              onChange={(e) => setSender(e.target.value)}
+              placeholder="Nome do Remetente / Município"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <Label htmlFor="editDestination">Destinatário / Destino *</Label>
+            <Input
+              id="editDestination"
+              value={destination}
+              onChange={(e) => setDestination(e.target.value)}
+              placeholder="Nome do Destinatário - Município"
+              required
+            />
+          </div>
+
+          <div className="space-y-1">
+            <Label htmlFor="editInvoices">Notas Fiscais (separadas por vírgula)</Label>
+            <Input
+              id="editInvoices"
+              value={invoices}
+              onChange={(e) => setInvoices(e.target.value)}
+              placeholder="Ex: NF-1020, NF-1021"
+            />
+          </div>
+
+          {drivers.length > 0 && (
+            <div className="space-y-1">
+              <Label htmlFor="editDriverId">Motorista Designado</Label>
+              <select
+                id="editDriverId"
+                value={driverId}
+                onChange={(e) => setDriverId(e.target.value)}
+                className="flex h-9 w-full rounded-[6px] border border-[#D6D3D1] bg-[#FAFAF9] px-2.5 text-xs text-[#1C1917]"
+              >
+                <option value="">Selecione o motorista...</option>
+                {drivers.map((d) => (
+                  <option key={d.id} value={d.id}>
+                    {d.name} {d.default_plate ? `(${d.default_plate})` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <div className="flex items-center justify-end gap-2 pt-3 border-t border-[#E7E5E4]">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={onClose}
+              disabled={isPending}
+            >
+              Cancelar
+            </Button>
+            <Button
+              type="submit"
+              size="sm"
+              className="bg-[#0D9488] hover:bg-[#0F766E]"
+              disabled={isPending}
+            >
+              {isPending ? 'Salvando...' : 'Salvar Alterações'}
+            </Button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+})

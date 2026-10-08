@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition, useRef } from 'react'
+import { useState, useTransition, useRef, useEffect } from 'react'
 import { registerCheckin, registerCheckout, revertCheckin, revertCheckout } from "@/app/actions"
 import {
   MapPin,
@@ -14,7 +14,71 @@ import {
   X,
   Eye,
   Mail,
+  Loader2,
 } from "lucide-react"
+
+/**
+ * Utilitário de alta performance: comprime imagens no navegador (client-side) via Canvas.
+ * Transforma fotos mobile de 8-15MB em arquivos de ~200-300KB antes do upload.
+ */
+async function compressImageFile(file: File): Promise<File> {
+  // Se já for menor que 300KB, dispensa compressão
+  if (file.size <= 300 * 1024) return file
+
+  return new Promise((resolve) => {
+    const reader = new FileReader()
+    reader.readAsDataURL(file)
+    reader.onload = (event) => {
+      const img = new Image()
+      img.src = event.target?.result as string
+      img.onload = () => {
+        const MAX_WIDTH = 1280
+        const MAX_HEIGHT = 1280
+        let width = img.width
+        let height = img.height
+
+        if (width > MAX_WIDTH || height > MAX_HEIGHT) {
+          if (width > height) {
+            height = Math.round((height * MAX_WIDTH) / width)
+            width = MAX_WIDTH
+          } else {
+            width = Math.round((width * MAX_HEIGHT) / height)
+            height = MAX_HEIGHT
+          }
+        }
+
+        const canvas = document.createElement('canvas')
+        canvas.width = width
+        canvas.height = height
+        const ctx = canvas.getContext('2d')
+        if (!ctx) {
+          resolve(file)
+          return
+        }
+
+        ctx.drawImage(img, 0, 0, width, height)
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) {
+              resolve(file)
+              return
+            }
+            const cleanName = file.name.replace(/\.[^/.]+$/, '') + '.jpg'
+            const compressed = new File([blob], cleanName, {
+              type: 'image/jpeg',
+              lastModified: Date.now(),
+            })
+            resolve(compressed)
+          },
+          'image/jpeg',
+          0.75
+        )
+      }
+      img.onerror = () => resolve(file)
+    }
+    reader.onerror = () => resolve(file)
+  })
+}
 
 export function DriverActions({
   tripId,
@@ -35,6 +99,8 @@ export function DriverActions({
   const [geoStatus, setGeoStatus] = useState<string>('')
   const [emailStatusMsg, setEmailStatusMsg] = useState<string | null>(null)
   const [showRevertConfirm, setShowRevertConfirm] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [isCompressing, setIsCompressing] = useState(false)
 
   // Foto comprobatória
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
@@ -42,12 +108,35 @@ export function DriverActions({
   const [viewingPhoto, setViewingPhoto] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const handlePhotoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  // Prevenção de vazamento de memória (Memory Leak) ao desmontar componente
+  useEffect(() => {
+    return () => {
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl)
+      }
+    }
+  }, [previewUrl])
+
+  const handlePhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (file) {
-      setSelectedFile(file)
-      const url = URL.createObjectURL(file)
-      setPreviewUrl(url)
+      if (previewUrl) {
+        URL.revokeObjectURL(previewUrl)
+      }
+      setActionError(null)
+      setIsCompressing(true)
+      try {
+        const optimized = await compressImageFile(file)
+        setSelectedFile(optimized)
+        const url = URL.createObjectURL(optimized)
+        setPreviewUrl(url)
+      } catch (err) {
+        setSelectedFile(file)
+        const url = URL.createObjectURL(file)
+        setPreviewUrl(url)
+      } finally {
+        setIsCompressing(false)
+      }
     }
   }
 
@@ -63,6 +152,7 @@ export function DriverActions({
   }
 
   const handleCheckin = () => {
+    setActionError(null)
     setGeoStatus('Capturando GPS do local...')
 
     const doSubmit = (lat?: number, lng?: number) => {
@@ -74,12 +164,12 @@ export function DriverActions({
       startTransition(async () => {
         const res = await registerCheckin(tripId, formData, lat, lng)
         setGeoStatus('')
+        if (res?.error) {
+          setActionError(res.error)
+          return
+        }
         if (res?.emailSent) {
-          setEmailStatusMsg(
-            res.simulated
-              ? `E-mail de aviso enviado para ${res.recipientEmail} (Simulado)`
-              : `E-mail de aviso de chegada enviado para ${res.recipientEmail}!`
-          )
+          setEmailStatusMsg('E-mail oficial de aviso de chegada disparado para o destinatário!')
         }
       })
     }
@@ -91,10 +181,10 @@ export function DriverActions({
           doSubmit(position.coords.latitude, position.coords.longitude)
         },
         () => {
-          setGeoStatus('GPS não autorizado. Enviando data e hora oficiais...')
+          setGeoStatus('GPS não disponível no momento. Enviando data e hora oficiais...')
           doSubmit()
         },
-        { timeout: 8000 }
+        { enableHighAccuracy: true, timeout: 5000, maximumAge: 30000 }
       )
     } else {
       doSubmit()
@@ -102,37 +192,71 @@ export function DriverActions({
   }
 
   const handleCheckout = () => {
+    setActionError(null)
     startTransition(async () => {
       const res = await registerCheckout(tripId)
+      if (res?.error) {
+        setActionError(res.error)
+        return
+      }
       if (res?.emailSent) {
-        setEmailStatusMsg(
-          res.simulated
-            ? `E-mail de saída enviado para ${res.recipientEmail} (Simulado)`
-            : `E-mail de saída enviado para ${res.recipientEmail} e cópias!`
-        )
+        setEmailStatusMsg('E-mail oficial de saída e finalização disparado para o destinatário!')
       }
     })
   }
 
   const handleRevertCheckin = () => {
+    setActionError(null)
     startTransition(async () => {
-      await revertCheckin(tripId)
+      const res = await revertCheckin(tripId)
+      if (res?.error) {
+        setActionError(res.error)
+        setShowRevertConfirm(false)
+        return
+      }
       setShowRevertConfirm(false)
       removePhoto()
     })
   }
 
   const handleRevertCheckout = () => {
+    setActionError(null)
     startTransition(async () => {
-      await revertCheckout(tripId)
+      const res = await revertCheckout(tripId)
+      if (res?.error) {
+        setActionError(res.error)
+        setShowRevertConfirm(false)
+        return
+      }
       setShowRevertConfirm(false)
     })
+  }
+
+  // Janela de segurança de 15 minutos para reversão
+  const canRevertArrival = () => {
+    if (!arrivalTime) return true
+    const elapsedMinutes = (Date.now() - new Date(arrivalTime).getTime()) / (1000 * 60)
+    return elapsedMinutes <= 15
+  }
+
+  const canRevertCompletion = () => {
+    if (!completionTime) return true
+    const elapsedMinutes = (Date.now() - new Date(completionTime).getTime()) / (1000 * 60)
+    return elapsedMinutes <= 15
   }
 
   // 1. Em Trânsito -> Foto da Portaria + Botão "Chegada no Destino"
   if (status === 'in_transit' || status === 'pending') {
     return (
       <div className="space-y-4 pt-2">
+        {/* Alerta de Erro */}
+        {actionError && (
+          <div className="p-3 bg-red-50 text-red-700 text-xs rounded-[6px] border border-red-200 flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 shrink-0 text-red-600 mt-0.5" />
+            <span>{actionError}</span>
+          </div>
+        )}
+
         {/* Upload da Foto Comprobatória */}
         <div className="p-4 rounded-[8px] bg-white border border-[#D6D3D1] space-y-3 shadow-xs">
           <div className="flex items-center gap-2">
@@ -157,7 +281,12 @@ export function DriverActions({
             id="cameraInput"
           />
 
-          {!previewUrl ? (
+          {isCompressing ? (
+            <div className="w-full py-4 px-4 border border-[#0D9488]/30 rounded-[6px] bg-teal-50/20 text-xs font-semibold text-[#0D9488] flex items-center justify-center gap-2">
+              <Loader2 className="w-4 h-4 animate-spin text-[#0D9488]" />
+              <span>Otimizando foto para envio rápido...</span>
+            </div>
+          ) : !previewUrl ? (
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
@@ -175,10 +304,10 @@ export function DriverActions({
               />
               <div className="flex-1 min-w-0">
                 <span className="text-[11px] font-bold text-[#059669] flex items-center gap-1">
-                  <CheckCircle2 className="w-3.5 h-3.5" /> Foto Pronta
+                  <CheckCircle2 className="w-3.5 h-3.5" /> Foto Pronta Otimizada
                 </span>
                 <p className="text-[10px] text-[#57534E] truncate font-mono mt-0.5">
-                  {selectedFile?.name || 'foto_portaria.jpg'}
+                  {selectedFile?.name || 'foto_portaria.jpg'} ({(selectedFile?.size ? (selectedFile.size / 1024).toFixed(0) : 0)} KB)
                 </p>
                 <button
                   type="button"
@@ -204,10 +333,14 @@ export function DriverActions({
         {/* Botão de Chegada */}
         <button
           onClick={handleCheckin}
-          disabled={isPending}
+          disabled={isPending || isCompressing}
           className="w-full min-h-[58px] px-6 py-4 bg-[#0D9488] hover:bg-[#0F766E] active:scale-[0.99] text-white font-bold text-base rounded-[8px] transition-all duration-200 shadow-accent-glow flex items-center justify-center gap-3 disabled:opacity-50"
         >
-          <MapPin className="w-5 h-5 shrink-0" />
+          {isPending ? (
+            <Loader2 className="w-5 h-5 animate-spin" />
+          ) : (
+            <MapPin className="w-5 h-5 shrink-0" />
+          )}
           <span>{isPending ? 'Gravando Comprovação...' : 'Chegada no Destino'}</span>
         </button>
 
@@ -228,6 +361,14 @@ export function DriverActions({
   if (status === 'arrived' || status === 'unloading') {
     return (
       <div className="space-y-4 pt-2">
+        {/* Alerta de Erro */}
+        {actionError && (
+          <div className="p-3 bg-red-50 text-red-700 text-xs rounded-[6px] border border-red-200 flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 shrink-0 text-red-600 mt-0.5" />
+            <span>{actionError}</span>
+          </div>
+        )}
+
         <div className="p-4 rounded-[8px] bg-[#CCFBF1]/40 border border-[#99F6E4] text-center space-y-2">
           <div className="flex items-center justify-center gap-1.5 text-xs font-mono font-bold text-[#0F766E] uppercase tracking-wider">
             <Clock className="w-4 h-4" /> Chegada Registrada
@@ -273,45 +414,55 @@ export function DriverActions({
           disabled={isPending}
           className="w-full min-h-[54px] px-6 py-3.5 bg-[#0F172A] hover:bg-[#1E293B] active:scale-[0.99] text-white font-semibold text-base rounded-[8px] transition-all duration-200 flex items-center justify-center gap-2.5 shadow-sm disabled:opacity-50"
         >
-          <CheckCircle2 className="w-5 h-5 text-[#0D9488]" />
+          {isPending ? (
+            <Loader2 className="w-5 h-5 animate-spin text-[#0D9488]" />
+          ) : (
+            <CheckCircle2 className="w-5 h-5 text-[#0D9488]" />
+          )}
           <span>{isPending ? 'Gravando Finalização...' : 'Finalização da Descarga'}</span>
         </button>
 
-        {/* Botão para Reverter Ação (Caso tenha apertado sem querer) */}
-        {!showRevertConfirm ? (
-          <div className="text-center pt-1">
-            <button
-              type="button"
-              onClick={() => setShowRevertConfirm(true)}
-              className="inline-flex items-center gap-1.5 text-xs text-[#78716C] hover:text-amber-700 transition-colors py-1 px-2 rounded-[4px] hover:bg-amber-50"
-            >
-              <RotateCcw className="w-3.5 h-3.5" />
-              <span>Apertei sem querer? Desfazer Chegada</span>
-            </button>
-          </div>
-        ) : (
-          <div className="p-3 rounded-[6px] bg-amber-50 border border-amber-200 text-center space-y-2">
-            <p className="text-xs text-amber-900 font-medium flex items-center justify-center gap-1">
-              <AlertTriangle className="w-3.5 h-3.5" /> Deseja cancelar o registro de chegada e voltar para Em Trânsito?
-            </p>
-            <div className="flex items-center justify-center gap-2">
+        {/* Botão para Reverter Ação (Janela de 15 minutos) */}
+        {canRevertArrival() ? (
+          !showRevertConfirm ? (
+            <div className="text-center pt-1">
               <button
                 type="button"
-                onClick={handleRevertCheckin}
-                disabled={isPending}
-                className="px-3 py-1.5 rounded-[4px] bg-amber-600 text-white text-xs font-semibold hover:bg-amber-700 transition-colors"
+                onClick={() => setShowRevertConfirm(true)}
+                className="inline-flex items-center gap-1.5 text-xs text-[#78716C] hover:text-amber-700 transition-colors py-1 px-2 rounded-[4px] hover:bg-amber-50"
               >
-                {isPending ? 'Revertendo...' : 'Sim, Desfazer Chegada'}
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowRevertConfirm(false)}
-                className="px-3 py-1.5 rounded-[4px] border border-gray-300 text-gray-700 text-xs hover:bg-white"
-              >
-                Cancelar
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Apertei sem querer? Desfazer Chegada</span>
               </button>
             </div>
-          </div>
+          ) : (
+            <div className="p-3 rounded-[6px] bg-amber-50 border border-amber-200 text-center space-y-2">
+              <p className="text-xs text-amber-900 font-medium flex items-center justify-center gap-1">
+                <AlertTriangle className="w-3.5 h-3.5" /> Deseja cancelar o registro de chegada e voltar para Em Trânsito?
+              </p>
+              <div className="flex items-center justify-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleRevertCheckin}
+                  disabled={isPending}
+                  className="px-3 py-1.5 rounded-[4px] bg-amber-600 text-white text-xs font-semibold hover:bg-amber-700 transition-colors"
+                >
+                  {isPending ? 'Revertendo...' : 'Sim, Desfazer Chegada'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowRevertConfirm(false)}
+                  className="px-3 py-1.5 rounded-[4px] border border-gray-300 text-gray-700 text-xs hover:bg-white"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          )
+        ) : (
+          <p className="text-[11px] text-[#A8A29E] text-center font-mono">
+            🔒 Chegada confirmada. Limite de 15 minutos para alteração direta finalizado.
+          </p>
         )}
 
         {/* Modal de visualização da foto */}
@@ -337,6 +488,14 @@ export function DriverActions({
   // 3. Finalizado
   return (
     <div className="space-y-4 pt-2">
+      {/* Alerta de Erro */}
+      {actionError && (
+        <div className="p-3 bg-red-50 text-red-700 text-xs rounded-[6px] border border-red-200 flex items-start gap-2">
+          <AlertTriangle className="w-4 h-4 shrink-0 text-red-600 mt-0.5" />
+          <span>{actionError}</span>
+        </div>
+      )}
+
       <div className="p-6 rounded-[8px] bg-[#ECFDF5] border border-[#A7F3D0] text-center space-y-3">
         <div className="w-12 h-12 rounded-full bg-[#059669] text-white flex items-center justify-center mx-auto shadow-sm">
           <ShieldCheck className="w-7 h-7" />
@@ -374,41 +533,47 @@ export function DriverActions({
         </div>
       </div>
 
-      {/* Opção de Desfazer Finalização */}
-      {!showRevertConfirm ? (
-        <div className="text-center">
-          <button
-            type="button"
-            onClick={() => setShowRevertConfirm(true)}
-            className="inline-flex items-center gap-1.5 text-xs text-[#78716C] hover:text-amber-700 transition-colors py-1 px-2 rounded-[4px] hover:bg-amber-50"
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-            <span>Apertei sem querer? Desfazer Finalização</span>
-          </button>
-        </div>
-      ) : (
-        <div className="p-3 rounded-[6px] bg-amber-50 border border-amber-200 text-center space-y-2">
-          <p className="text-xs text-amber-900 font-medium flex items-center justify-center gap-1">
-            <AlertTriangle className="w-3.5 h-3.5" /> Deseja reabrir a viagem para continuar na etapa de descarga?
-          </p>
-          <div className="flex items-center justify-center gap-2">
+      {/* Opção de Desfazer Finalização (Janela de 15 minutos) */}
+      {canRevertCompletion() ? (
+        !showRevertConfirm ? (
+          <div className="text-center">
             <button
               type="button"
-              onClick={handleRevertCheckout}
-              disabled={isPending}
-              className="px-3 py-1.5 rounded-[4px] bg-amber-600 text-white text-xs font-semibold hover:bg-amber-700 transition-colors"
+              onClick={() => setShowRevertConfirm(true)}
+              className="inline-flex items-center gap-1.5 text-xs text-[#78716C] hover:text-amber-700 transition-colors py-1 px-2 rounded-[4px] hover:bg-amber-50"
             >
-              {isPending ? 'Revertendo...' : 'Sim, Desfazer Finalização'}
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowRevertConfirm(false)}
-              className="px-3 py-1.5 rounded-[4px] border border-gray-300 text-gray-700 text-xs hover:bg-white"
-            >
-              Cancelar
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span>Apertei sem querer? Desfazer Finalização</span>
             </button>
           </div>
-        </div>
+        ) : (
+          <div className="p-3 rounded-[6px] bg-amber-50 border border-amber-200 text-center space-y-2">
+            <p className="text-xs text-amber-900 font-medium flex items-center justify-center gap-1">
+              <AlertTriangle className="w-3.5 h-3.5" /> Deseja reabrir a viagem para continuar na etapa de descarga?
+            </p>
+            <div className="flex items-center justify-center gap-2">
+              <button
+                type="button"
+                onClick={handleRevertCheckout}
+                disabled={isPending}
+                className="px-3 py-1.5 rounded-[4px] bg-amber-600 text-white text-xs font-semibold hover:bg-amber-700 transition-colors"
+              >
+                {isPending ? 'Revertendo...' : 'Sim, Desfazer Finalização'}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowRevertConfirm(false)}
+                className="px-3 py-1.5 rounded-[4px] border border-gray-300 text-gray-700 text-xs hover:bg-white"
+              >
+                Cancelar
+              </button>
+            </div>
+          </div>
+        )
+      ) : (
+        <p className="text-[11px] text-[#A8A29E] text-center font-mono">
+          🔒 Descarga finalizada. Prazo de tolerância para alteração direta finalizado.
+        </p>
       )}
 
       {/* Modal de visualização da foto */}

@@ -3,11 +3,11 @@ import { requireAuth } from "@/utils/supabase/auth"
 import { RecipientManager } from "./RecipientManager"
 
 export default async function DestinatariosPage() {
-  const [currentUser, recipients, companies, senders] = await Promise.all([
-    requireAuth(),
-    getRecipients(),
-    getCompanies(),
-    getSenders(),
+  const currentUser = await requireAuth()
+  const [recipients, companies, senders] = await Promise.all([
+    getRecipients(undefined, currentUser.organization_id),
+    getCompanies(currentUser.organization_id),
+    getSenders(currentUser.organization_id),
   ])
 
   return (

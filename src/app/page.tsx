@@ -12,10 +12,10 @@ import {
 import { TripsDashboardTable } from "@/components/TripsDashboardTable"
 
 export default async function Home() {
-  const [currentUser, trips, drivers] = await Promise.all([
-    requireAuth(),
-    getTrips(),
-    getDrivers()
+  const currentUser = await requireAuth()
+  const [trips, drivers] = await Promise.all([
+    getTrips(currentUser.organization_id),
+    getDrivers(currentUser.organization_id)
   ])
 
   const inTransitTrips = trips.filter(

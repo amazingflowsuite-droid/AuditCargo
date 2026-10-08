@@ -6,13 +6,14 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { ShieldCheck, Truck, Lock, AlertCircle, ArrowRight, Phone } from 'lucide-react'
+import { ShieldCheck, Truck, Lock, AlertCircle, ArrowRight, Phone, Eye, EyeOff } from 'lucide-react'
 import { findActiveTripForDriver } from '@/app/actions'
 
 export default function MotoristaRescuePage() {
   const router = useRouter()
   const [identifier, setIdentifier] = useState('')
   const [pin, setPin] = useState('')
+  const [showPin, setShowPin] = useState(false)
   const [error, setError] = useState('')
   const [isPending, startTransition] = useTransition()
 
@@ -85,12 +86,22 @@ export default function MotoristaRescuePage() {
               </div>
 
               <div className="space-y-1.5">
-                <Label htmlFor="pin" className="text-xs font-semibold text-[#1C1917] flex items-center gap-1.5">
-                  <Lock className="w-3.5 h-3.5 text-[#0D9488]" /> PIN de 4 dígitos
-                </Label>
+                <div className="flex items-center justify-between">
+                  <Label htmlFor="pin" className="text-xs font-semibold text-[#1C1917] flex items-center gap-1.5">
+                    <Lock className="w-3.5 h-3.5 text-[#0D9488]" /> PIN de 4 dígitos
+                  </Label>
+                  <button
+                    type="button"
+                    onClick={() => setShowPin(!showPin)}
+                    className="text-[11px] text-[#78716C] hover:text-[#0D9488] flex items-center gap-1 font-medium transition-colors"
+                  >
+                    {showPin ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                    <span>{showPin ? 'Ocultar' : 'Exibir'}</span>
+                  </button>
+                </div>
                 <Input
                   id="pin"
-                  type="password"
+                  type={showPin ? 'text' : 'password'}
                   inputMode="numeric"
                   maxLength={4}
                   value={pin}

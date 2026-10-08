@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useTransition, useEffect } from 'react'
+import { useState, useTransition, useEffect, useMemo } from 'react'
 import Link from 'next/link'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -18,6 +18,7 @@ import {
   Users,
   ExternalLink,
   Mail,
+  AlertCircle,
 } from "lucide-react"
 
 export function NewTransportForm({
@@ -49,12 +50,21 @@ export function NewTransportForm({
 
   const [isPending, startTransition] = useTransition()
   const [result, setResult] = useState<any | null>(null)
+  const [validationError, setValidationError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
 
-  // Filtros por empresa
-  const filteredBranches = branches.filter((b) => !selectedCompanyId || b.company_id === selectedCompanyId)
-  const filteredDrivers = drivers.filter((d) => !selectedCompanyId || d.company_id === selectedCompanyId)
-  const filteredSenders = senders.filter((s) => !selectedCompanyId || s.company_id === selectedCompanyId)
+  // Filtros por empresa memoizados para evitar re-cálculos a cada digitação de CT-e ou notas
+  const filteredBranches = useMemo(() => {
+    return branches.filter((b) => !selectedCompanyId || b.company_id === selectedCompanyId)
+  }, [branches, selectedCompanyId])
+
+  const filteredDrivers = useMemo(() => {
+    return drivers.filter((d) => !selectedCompanyId || d.company_id === selectedCompanyId)
+  }, [drivers, selectedCompanyId])
+
+  const filteredSenders = useMemo(() => {
+    return senders.filter((s) => !selectedCompanyId || s.company_id === selectedCompanyId)
+  }, [senders, selectedCompanyId])
 
   // Auto-seleciona a primeira filial disponível
   useEffect(() => {
@@ -67,31 +77,41 @@ export function NewTransportForm({
   }, [selectedCompanyId, filteredBranches, selectedBranchId])
 
   // Lista estritamente os destinatários vinculados ao remetente selecionado
-  const filteredRecipients = registeredRecipients.filter((r) => {
-    if (!selectedSenderId) return false
-    return r.sender_id === selectedSenderId
-  })
+  const filteredRecipients = useMemo(() => {
+    if (!selectedSenderId) return []
+    return registeredRecipients.filter((r) => r.sender_id === selectedSenderId)
+  }, [registeredRecipients, selectedSenderId])
 
-  const currentDriver = drivers.find((d) => d.id === selectedDriverId)
-  const currentSender = filteredSenders.find((s) => s.id === selectedSenderId)
-  const currentRecipient = filteredRecipients.find((r) => r.id === selectedRecipientId)
+  const currentDriver = useMemo(() => {
+    return drivers.find((d) => d.id === selectedDriverId)
+  }, [drivers, selectedDriverId])
+
+  const currentSender = useMemo(() => {
+    return filteredSenders.find((s) => s.id === selectedSenderId)
+  }, [filteredSenders, selectedSenderId])
+
+  const currentRecipient = useMemo(() => {
+    return filteredRecipients.find((r) => r.id === selectedRecipientId)
+  }, [filteredRecipients, selectedRecipientId])
 
   const handleSenderChange = (senderId: string) => {
     setSelectedSenderId(senderId)
     setSelectedRecipientId('')
+    setValidationError(null)
   }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setResult(null)
+    setValidationError(null)
 
     if (!currentSender) {
-      alert('Selecione um remetente cadastrado.')
+      setValidationError('Por favor, selecione um remetente cadastrado para vincular a carga.')
       return
     }
 
     if (!currentRecipient) {
-      alert('Selecione um destinatário cadastrado.')
+      setValidationError('Por favor, selecione um destinatário cadastrado vinculado a este remetente.')
       return
     }
 
@@ -256,9 +276,22 @@ export function NewTransportForm({
           </div>
         ) : (
           <form onSubmit={handleSubmit} className="space-y-6">
-            {result?.error && (
-              <div className="p-3 bg-red-100 text-red-800 rounded-[6px] text-xs font-medium">
-                Erro ao emitir transporte: {result.error}
+            {(validationError || result?.error) && (
+              <div className="p-3.5 bg-red-50 border border-red-200 text-red-800 rounded-[6px] text-xs font-medium flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                  <span>{validationError || result?.error}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setValidationError(null)
+                    if (result?.error) setResult(null)
+                  }}
+                  className="text-red-500 hover:text-red-700 text-xs font-bold uppercase ml-3 shrink-0"
+                >
+                  Fechar
+                </button>
               </div>
             )}
 

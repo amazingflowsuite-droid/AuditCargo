@@ -15,6 +15,7 @@ export type UserProfile = {
     cnpj?: string | null
     slug?: string
     logo_url?: string | null
+    active?: boolean
   }
 }
 
@@ -34,11 +35,16 @@ export async function getCurrentUser(): Promise<UserProfile | null> {
 
   const { data: profile } = await supabase
     .from('profiles')
-    .select('*, organization:organizations(id, name, cnpj, slug, logo_url)')
+    .select('*, organization:organizations(id, name, cnpj, slug, logo_url, active)')
     .eq('id', user.id)
     .single()
 
   if (!profile || !profile.active) {
+    return null
+  }
+
+  // Defesa em profundidade: Se a organização estiver desativada pelo Master, bloqueia usuários comuns
+  if (!profile.is_super_admin && profile.organization && profile.organization.active === false) {
     return null
   }
 
