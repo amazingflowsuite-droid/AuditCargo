@@ -360,7 +360,7 @@ async function findActiveTripByChatId(chatId: string) {
       FROM trips t
       LEFT JOIN drivers d ON t.driver_id = d.id
       WHERE (t.telegram_chat_id = $1 OR d.telegram_chat_id = $1)
-        AND t.status != 'finished'
+        AND t.status NOT IN ('finished', 'cancelled')
       ORDER BY t.created_at DESC
       LIMIT 1
       `,
