@@ -116,6 +116,7 @@ export async function sendTripTelegramPrompt(
     id: string
     token: string
     destination: string
+    status?: string
     cte_number?: string | null
     service_type?: string | null
     drivers?: { name?: string; phone?: string } | null
@@ -131,8 +132,32 @@ export async function sendTripTelegramPrompt(
     `Destino: <b>${trip.destination}</b>\n\n` +
     `Por favor, informe seu status ou envie dados da viagem pelos botões abaixo:`
 
-  const replyMarkup = {
-    inline_keyboard: [
+  const replyMarkup: any = { inline_keyboard: [] }
+
+  if (trip.status === 'arrived' || trip.status === 'unloading') {
+    replyMarkup.inline_keyboard = [
+      [
+        {
+          text: '✅ Finalizar Descarga',
+          callback_data: `FINISH_DISCHARGE_${trip.id}`,
+        },
+      ],
+      [
+        {
+          text: '🔙 Desfazer Chegada (Rollback)',
+          callback_data: `ROLLBACK_ARRIVE_${trip.id}`,
+        },
+      ],
+      [
+        {
+          text: '📷 Enviar Canhoto / Foto',
+          callback_data: `REQ_PHOTO_${trip.id}`,
+        },
+      ],
+    ]
+  } else {
+    // Default in_progress / pending behavior
+    replyMarkup.inline_keyboard = [
       [
         {
           text: '📍 Cheguei no Destino',
@@ -151,15 +176,11 @@ export async function sendTripTelegramPrompt(
       ],
       [
         {
-          text: '📍 Compartilhar GPS',
-          callback_data: `REQ_LOCATION_${trip.id}`,
-        },
-        {
           text: '📷 Enviar Canhoto / Foto',
           callback_data: `REQ_PHOTO_${trip.id}`,
         },
       ],
-    ],
+    ]
   }
 
   return sendTelegramTextMessage(chatId, messageText, {

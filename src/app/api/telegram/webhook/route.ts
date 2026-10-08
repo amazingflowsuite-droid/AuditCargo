@@ -6,7 +6,7 @@ import {
   answerTelegramCallbackQuery,
   getTelegramFileDirectUrl,
 } from '@/utils/telegram'
-import { sendArrivalEmail } from '@/utils/mailer'
+import { sendArrivalEmail, sendCompletionEmail } from '@/utils/mailer'
 
 export const dynamic = 'force-dynamic'
 
@@ -42,8 +42,42 @@ export async function POST(request: NextRequest) {
 
       if (data.startsWith('ARRIVED_')) {
         const tripId = data.replace('ARRIVED_', '')
+        await answerTelegramCallbackQuery(callbackId)
+        
+        await sendTelegramTextMessage(
+          fromChatId,
+          'Você tem algum Canhoto/Comprovante de Portaria para anexar agora? (A chegada só é confirmada após essa etapa)',
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: '✅ Sim, anexar foto agora', callback_data: `ATTACH_CANHOTO_${tripId}` }
+                ],
+                [
+                  { text: '➡️ Não, confirmar chegada sem foto', callback_data: `CONFIRM_ARRIVE_${tripId}` }
+                ]
+              ]
+            }
+          }
+        )
+      } else if (data.startsWith('ATTACH_CANHOTO_')) {
+        await answerTelegramCallbackQuery(callbackId)
+        await sendTelegramTextMessage(
+          fromChatId,
+          '📷 Por favor, envie a foto nítida do canhoto aqui no chat. Assim que recebermos, confirmaremos sua chegada automaticamente!'
+        )
+      } else if (data.startsWith('CONFIRM_ARRIVE_')) {
+        const tripId = data.replace('CONFIRM_ARRIVE_', '')
         await answerTelegramCallbackQuery(callbackId, 'Registrando chegada no destino...')
         await handleArrivedAction(tripId, fromChatId)
+      } else if (data.startsWith('ROLLBACK_ARRIVE_')) {
+        const tripId = data.replace('ROLLBACK_ARRIVE_', '')
+        await answerTelegramCallbackQuery(callbackId, 'Desfazendo chegada...')
+        await handleRollbackAction(tripId, fromChatId)
+      } else if (data.startsWith('FINISH_DISCHARGE_')) {
+        const tripId = data.replace('FINISH_DISCHARGE_', '')
+        await answerTelegramCallbackQuery(callbackId, 'Finalizando descarga...')
+        await handleFinishDischargeAction(tripId, fromChatId)
       } else if (data.startsWith('TRANSIT_')) {
         await answerTelegramCallbackQuery(callbackId, 'Viagem em trânsito!')
         await sendTelegramTextMessage(
@@ -136,19 +170,28 @@ export async function POST(request: NextRequest) {
         const updateRes = await pool.query(
           `
           UPDATE trips
-          SET delivery_receipt_url = $1
+          SET checkin_photo_url = $1, delivery_receipt_url = $1
           WHERE telegram_chat_id = $2 AND status != 'finished'
-          RETURNING id, token
+          RETURNING *
           `,
           [fileUrl, String(chatId)]
         )
 
         if (updateRes.rows.length > 0) {
           const trip = updateRes.rows[0]
-          await sendTelegramTextMessage(
-            chatId,
-            `📸 <b>AuditCargo:</b> Foto do comprovante/canhoto recebida e vinculada com sucesso à Viagem <b>#${trip.token}</b>!`
-          )
+          
+          if (trip.status === 'in_progress' || trip.status === 'pending') {
+            await sendTelegramTextMessage(
+              chatId,
+              `📸 <b>AuditCargo:</b> Foto recebida! Confirmando sua chegada automaticamente...`
+            )
+            await handleArrivedAction(trip.id, chatId)
+          } else {
+            await sendTelegramTextMessage(
+              chatId,
+              `📸 <b>AuditCargo:</b> Foto do comprovante/canhoto recebida e vinculada com sucesso à Viagem <b>#${trip.token}</b>!`
+            )
+          }
         } else {
           await sendTelegramTextMessage(
             chatId,
@@ -177,6 +220,7 @@ export async function POST(request: NextRequest) {
             id: trip.id,
             token: trip.token,
             destination: trip.destination,
+            status: trip.status,
             cte_number: trip.cte_number,
             service_type: trip.service_type,
             drivers: { name: trip.driver_name, phone: trip.driver_phone },
@@ -209,6 +253,7 @@ export async function POST(request: NextRequest) {
           id: trip.id,
           token: trip.token,
           destination: trip.destination,
+          status: trip.status,
           cte_number: trip.cte_number,
           service_type: trip.service_type,
           drivers: { name: trip.driver_name, phone: trip.driver_phone },
@@ -381,6 +426,21 @@ async function handleArrivedAction(tripId: string, chatId: string | number) {
     } catch (emailErr) {
       console.error('⚠️ [Telegram Webhook] Erro ao enviar e-mail de chegada:', emailErr)
     }
+
+    // Atualiza o menu do telegram
+    const driverInfo = await pool.query('SELECT name, phone FROM drivers WHERE id = $1', [trip.driver_id])
+    const driver = driverInfo.rows[0] || {}
+
+    await sendTripTelegramPrompt(chatId, {
+      id: trip.id,
+      token: trip.token,
+      destination: trip.destination,
+      status: trip.status,
+      cte_number: trip.cte_number,
+      service_type: trip.service_type,
+      drivers: { name: driver.name, phone: driver.phone },
+    })
+
   } catch (err) {
     console.error('❌ [Telegram Webhook] Erro ao processar chegada:', err)
     await sendTelegramTextMessage(
@@ -389,3 +449,97 @@ async function handleArrivedAction(tripId: string, chatId: string | number) {
     )
   }
 }
+
+async function handleRollbackAction(tripId: string, chatId: string | number) {
+  const pool = getDbPool()
+  try {
+    const updateRes = await pool.query(
+      `
+      UPDATE trips
+      SET status = 'in_progress', arrival_time = NULL
+      WHERE id = $1 AND status = 'arrived'
+      RETURNING *
+      `,
+      [tripId]
+    )
+
+    if (updateRes.rows.length === 0) {
+      await sendTelegramTextMessage(chatId, 'ℹ️ Não foi possível desfazer. A viagem pode já estar finalizada ou ainda em trânsito.')
+      return
+    }
+
+    const trip = updateRes.rows[0]
+    await sendTelegramTextMessage(chatId, '🔙 <b>Chegada desfeita!</b> A viagem voltou para o status "Em Trânsito".')
+    
+    const driverInfo = await pool.query('SELECT name, phone FROM drivers WHERE id = $1', [trip.driver_id])
+    const driver = driverInfo.rows[0] || {}
+
+    await sendTripTelegramPrompt(chatId, {
+      id: trip.id,
+      token: trip.token,
+      destination: trip.destination,
+      status: trip.status,
+      cte_number: trip.cte_number,
+      service_type: trip.service_type,
+      drivers: { name: driver.name, phone: driver.phone },
+    })
+  } catch (err) {
+    console.error('❌ [Telegram Webhook] Erro ao desfazer chegada:', err)
+  }
+}
+
+async function handleFinishDischargeAction(tripId: string, chatId: string | number) {
+  const pool = getDbPool()
+  const now = new Date()
+
+  try {
+    const updateRes = await pool.query(
+      `
+      UPDATE trips
+      SET status = 'finished', completion_time = COALESCE(completion_time, NOW())
+      WHERE id = $1 AND status IN ('arrived', 'unloading')
+      RETURNING *
+      `,
+      [tripId]
+    )
+
+    if (updateRes.rows.length === 0) {
+      await sendTelegramTextMessage(chatId, 'ℹ️ Não foi possível finalizar. Verifique o status da viagem.')
+      return
+    }
+
+    const trip = updateRes.rows[0]
+    await sendTelegramTextMessage(chatId, '🎉 <b>Descarga finalizada com sucesso!</b> Viagem concluída.\nObrigado pelo seu trabalho e tenha um excelente dia!')
+
+    try {
+      const emailTarget = trip.recipient_email
+      if (emailTarget) {
+        let destName = trip.destination || 'Destinatário'
+        let destCity = ''
+        if (destName.includes('-')) {
+          const parts = destName.split('-')
+          destName = parts[0].trim()
+          destCity = parts.slice(1).join('-').trim()
+        }
+
+        const driverInfo = await pool.query('SELECT name, phone FROM drivers WHERE id = $1', [trip.driver_id])
+        const driver = driverInfo.rows[0] || {}
+
+        await sendCompletionEmail({
+          toEmail: emailTarget,
+          cteNumber: trip.cte_number || undefined,
+          driverName: driver.name || 'Motorista',
+          destinationName: destName,
+          destinationCity: destCity,
+          departureTime: now.toISOString(),
+          invoices: trip.invoices || [],
+        })
+      }
+    } catch (emailErr) {
+      console.error('⚠️ [Telegram Webhook] Erro ao enviar e-mail de finalização:', emailErr)
+    }
+  } catch (err) {
+    console.error('❌ [Telegram Webhook] Erro ao processar finalização:', err)
+  }
+}
+
