@@ -276,10 +276,25 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Tenta encontrar uma viagem ativa para o motorista pelo chatId
+    const activeTripForChat = await findActiveTripByChatId(String(chatId))
+    if (activeTripForChat) {
+      await sendTripTelegramPrompt(chatId, {
+        id: activeTripForChat.id,
+        token: activeTripForChat.token,
+        destination: activeTripForChat.destination,
+        status: activeTripForChat.status,
+        cte_number: activeTripForChat.cte_number,
+        service_type: activeTripForChat.service_type,
+        drivers: { name: activeTripForChat.driver_name, phone: activeTripForChat.driver_phone },
+      })
+      return NextResponse.json({ ok: true })
+    }
+
     // Resposta padrão caso nenhuma viagem seja identificada
     await sendTelegramTextMessage(
       chatId,
-      'ℹ️ <b>AuditCargo Bot:</b> Digite o código/token da sua viagem para consultar o status ou utilize os botões da mensagem anterior.'
+      'ℹ️ <b>AuditCargo Bot:</b> Não identificamos uma viagem ativa no momento. Digite o código/token da sua viagem para consultar o status.'
     )
 
     return NextResponse.json({ ok: true })
@@ -461,7 +476,7 @@ async function handleRollbackAction(tripId: string, chatId: string | number) {
     const updateRes = await pool.query(
       `
       UPDATE trips
-      SET status = 'in_transit', arrival_time = NULL
+      SET status = 'in_transit', arrival_time = NULL, checkin_photo_url = NULL, delivery_receipt_url = NULL
       WHERE id = $1 AND status = 'arrived'
       RETURNING *
       `,
@@ -552,7 +567,23 @@ async function handleFinishDischargeAction(tripId: string, chatId: string | numb
     }
 
     const trip = updateRes.rows[0]
-    await sendTelegramTextMessage(chatId, '🎉 <b>Descarga finalizada com sucesso!</b> Viagem concluída.\nObrigado pelo seu trabalho e tenha um excelente dia!')
+    await sendTelegramTextMessage(
+      chatId,
+      '🎉 <b>Descarga finalizada com sucesso!</b> Viagem concluída.\nObrigado pelo seu trabalho e tenha um excelente dia!\n\n<i>(Se você finalizou por engano, use o botão de desfazer no menu abaixo)</i>'
+    )
+
+    const driverInfo = await pool.query('SELECT name, phone FROM drivers WHERE id = $1', [trip.driver_id])
+    const driver = driverInfo.rows[0] || {}
+
+    await sendTripTelegramPrompt(chatId, {
+      id: trip.id,
+      token: trip.token,
+      destination: trip.destination,
+      status: trip.status,
+      cte_number: trip.cte_number,
+      service_type: trip.service_type,
+      drivers: { name: driver.name, phone: driver.phone },
+    })
 
     try {
       const emailTarget = trip.recipient_email
