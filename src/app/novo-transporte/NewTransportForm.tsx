@@ -16,9 +16,11 @@ import {
   Copy,
   FileText,
   Users,
-  ExternalLink,
   Mail,
   AlertCircle,
+  Check,
+  X,
+  ExternalLink,
 } from "lucide-react"
 
 export function TelegramIcon({ className = "w-4 h-4" }: { className?: string }) {
@@ -187,17 +189,24 @@ export function NewTransportForm({
 
   const [sendingTelegram, setSendingTelegram] = useState(false)
   const [telegramFeedback, setTelegramFeedback] = useState<{type: 'success' | 'error', message: string} | null>(null)
+  const [telegramModalLink, setTelegramModalLink] = useState<string | null>(null)
+  const [telegramCopied, setTelegramCopied] = useState(false)
 
   const handleSendTelegram = async () => {
     if (!result?.data?.id) return
     setSendingTelegram(true)
     setTelegramFeedback(null)
+    setTelegramModalLink(null)
     try {
       const res = await sendTelegramTripStatusPromptAction(result.data.id)
       if (res.success) {
         setTelegramFeedback({ type: 'success', message: res.message || 'Mensagem enviada com sucesso no Telegram!' })
       } else {
-        setTelegramFeedback({ type: 'error', message: res.error || 'Erro ao enviar via Telegram. O motorista pode não ter iniciado o bot.' })
+        if (res.notLinked && res.telegramLink) {
+          setTelegramModalLink(res.telegramLink)
+        } else {
+          setTelegramFeedback({ type: 'error', message: res.error || 'Erro ao enviar via Telegram. O motorista pode não ter iniciado o bot.' })
+        }
       }
     } catch (e: any) {
       setTelegramFeedback({ type: 'error', message: 'Erro inesperado ao enviar mensagem.' })
@@ -302,6 +311,100 @@ export function NewTransportForm({
             </Button>
           </div>
         </CardContent>
+
+        {/* MODAL DE VINCULAÇÃO E DISPARO VIA TELEGRAM BOT */}
+        {telegramModalLink && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs animate-in fade-in duration-150 text-left">
+            <div className="bg-white rounded-[10px] border border-[#E7E5E4] shadow-2xl max-w-md w-full overflow-hidden">
+              <div className="flex items-center justify-between px-5 py-3.5 bg-[#F0F9FF] border-b border-[#BAE6FD]">
+                <div className="flex items-center gap-2 text-[#0284C7]">
+                  <TelegramIcon className="w-5 h-5 text-[#229ED9]" />
+                  <h3 className="font-bold text-sm text-[#0C4A6E]">
+                    Acompanhamento via Telegram Bot
+                  </h3>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setTelegramModalLink(null)}
+                  className="text-[#78716C] hover:text-[#1C1917]"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="p-5 space-y-4">
+                <div>
+                  <div className="text-xs text-[#57534E]">Viagem Selecionada:</div>
+                  <div className="text-sm font-bold text-[#1C1917] font-mono">
+                    #{result.data.token} &bull; {result.data.destination}
+                  </div>
+                  {result.data.drivers?.name && (
+                    <div className="text-xs text-[#78716C] mt-0.5">
+                      Motorista: <strong>{result.data.drivers.name}</strong>
+                    </div>
+                  )}
+                </div>
+
+                <div className="p-3 bg-[#F8FAFC] border border-[#E2E8F0] rounded-[8px] space-y-2.5">
+                  <p className="text-xs text-[#334155] leading-relaxed">
+                    Para o motorista interagir com o bot no Telegram, envie o link exclusivo abaixo. Ao clicar em <strong>INICIAR (/start)</strong> no Telegram, o sistema vincula a viagem instantaneamente!
+                  </p>
+
+                  <div className="flex items-center gap-2">
+                    <Input
+                      readOnly
+                      value={telegramModalLink}
+                      className="text-xs font-mono h-9 bg-white select-all"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      className="h-9 px-3 shrink-0 gap-1.5"
+                      onClick={() => {
+                        navigator.clipboard.writeText(telegramModalLink)
+                        setTelegramCopied(true)
+                        setTimeout(() => setTelegramCopied(false), 3000)
+                      }}
+                    >
+                      {telegramCopied ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-600" />
+                          <span className="text-emerald-700 text-xs">Copiado</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" />
+                          <span className="text-xs">Copiar</span>
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#E7E5E4]">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setTelegramModalLink(null)}
+                  >
+                    Fechar
+                  </Button>
+                  <a
+                    href={telegramModalLink}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1.5 h-9 px-3.5 text-xs font-medium rounded-[6px] bg-[#229ED9] text-white hover:bg-[#1E88C7] transition-colors"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    Abrir Telegram
+                  </a>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
       </Card>
     )
   }
