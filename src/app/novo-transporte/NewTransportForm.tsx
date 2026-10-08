@@ -202,7 +202,7 @@ export function NewTransportForm({
       if (res.success) {
         setTelegramFeedback({ type: 'success', message: res.message || 'Mensagem enviada com sucesso no Telegram!' })
       } else {
-        if (res.notLinked && res.telegramLink) {
+        if (res.telegramLink) {
           setTelegramModalLink(res.telegramLink)
         } else {
           setTelegramFeedback({ type: 'error', message: res.error || 'Erro ao enviar via Telegram. O motorista pode não ter iniciado o bot.' })
