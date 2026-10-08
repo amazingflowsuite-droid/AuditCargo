@@ -1005,6 +1005,7 @@ export async function createTrip(payload: {
   status: string
   sender?: string
   sender_id?: string
+  sender_email?: string
   destination: string
   invoices: string[]
   recipient_email?: string
@@ -1101,6 +1102,27 @@ export async function createTrip(payload: {
     }
   }
 
+  let sender_email: string | null = null
+  if (payload.sender_email?.trim()) {
+    const sEmailNorm = payload.sender_email.trim().toLowerCase()
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(sEmailNorm)) {
+      sender_email = sEmailNorm
+    }
+  }
+
+  // Se não foi informado diretamente, busca o e-mail cadastrado no Remetente selecionado
+  if (!sender_email && payload.sender_id) {
+    const { data: senderCheck } = await supabase
+      .from('senders')
+      .select('email')
+      .eq('id', payload.sender_id)
+      .maybeSingle()
+
+    if (senderCheck?.email) {
+      sender_email = senderCheck.email.trim().toLowerCase()
+    }
+  }
+
   const insertObj: any = {
     company_id,
     branch_id,
@@ -1119,6 +1141,10 @@ export async function createTrip(payload: {
 
   if (recipient_email) {
     insertObj.recipient_email = recipient_email
+  }
+
+  if (sender_email) {
+    insertObj.sender_email = sender_email
   }
 
   let { data, error } = await supabase
@@ -1474,7 +1500,8 @@ export async function registerCheckin(
       *,
       drivers(name, phone),
       companies(name, contact, phone, email, website),
-      branches(name, code, city, state, email, phone, contact)
+      branches(name, code, city, state, email, phone, contact),
+      senders(id, name, email)
     `)
     .single()
 
@@ -1489,29 +1516,50 @@ export async function registerCheckin(
       if (!trip) return
       let targetEmail: string | null = null
 
-      const { data: recList } = await supabase
-        .from('recipients')
-        .select('name, email')
-        .not('email', 'is', null)
-
-      if (recList && recList.length > 0) {
-        const destLower = (trip.destination || '').toLowerCase()
-        const matched = recList.find((r: any) => {
-          if (!r.email) return false
-          const rNameLower = (r.name || '').toLowerCase()
-          return destLower.includes(rNameLower) || rNameLower.includes(destLower)
-        })
-        if (matched?.email) {
-          targetEmail = matched.email
+      // O e-mail de notificação deve ser enviado para o REMETENTE
+      if (trip.senders?.email) {
+        targetEmail = trip.senders.email
+      } else if (trip.sender_email) {
+        targetEmail = trip.sender_email
+      } else if (trip.sender_id) {
+        const { data: sData } = await supabase
+          .from('senders')
+          .select('email')
+          .eq('id', trip.sender_id)
+          .maybeSingle()
+        if (sData?.email) {
+          targetEmail = sData.email
         }
       }
 
+      // Se ainda não encontrou e temos o nome do remetente salvo na viagem
+      if (!targetEmail && trip.sender) {
+        let sQuery = supabase
+          .from('senders')
+          .select('name, email')
+          .not('email', 'is', null)
+
+        if (trip.organization_id) {
+          sQuery = sQuery.eq('organization_id', trip.organization_id)
+        }
+
+        const { data: senderList } = await sQuery
+        if (senderList && senderList.length > 0) {
+          const sLower = trip.sender.toLowerCase()
+          const matched = senderList.find((s: any) => {
+            if (!s.email) return false
+            const sName = (s.name || '').toLowerCase()
+            return sLower.includes(sName) || sName.includes(sLower)
+          })
+          if (matched?.email) {
+            targetEmail = matched.email
+          }
+        }
+      }
+
+      // Fallback seguro caso o remetente não possua e-mail configurado
       if (!targetEmail) {
         targetEmail = trip.recipient_email || null
-      }
-      if (!targetEmail && Array.isArray(trip.recipients)) {
-        const found = trip.recipients.find((r: any) => r.email && r.email.includes('@'))
-        if (found) targetEmail = found.email
       }
 
       if (targetEmail) {
@@ -1621,7 +1669,8 @@ export async function registerCheckout(tripId: string) {
       *,
       drivers(name, phone),
       companies(name, contact, phone, email, website),
-      branches(name, code, city, state, email, phone, contact)
+      branches(name, code, city, state, email, phone, contact),
+      senders(id, name, email)
     `)
     .single()
 
@@ -1636,29 +1685,50 @@ export async function registerCheckout(tripId: string) {
       if (!trip) return
       let targetEmail: string | null = null
 
-      const { data: recList } = await supabase
-        .from('recipients')
-        .select('name, email')
-        .not('email', 'is', null)
-
-      if (recList && recList.length > 0) {
-        const destLower = (trip.destination || '').toLowerCase()
-        const matched = recList.find((r: any) => {
-          if (!r.email) return false
-          const rNameLower = (r.name || '').toLowerCase()
-          return destLower.includes(rNameLower) || rNameLower.includes(destLower)
-        })
-        if (matched?.email) {
-          targetEmail = matched.email
+      // O e-mail de notificação deve ser enviado para o REMETENTE
+      if (trip.senders?.email) {
+        targetEmail = trip.senders.email
+      } else if (trip.sender_email) {
+        targetEmail = trip.sender_email
+      } else if (trip.sender_id) {
+        const { data: sData } = await supabase
+          .from('senders')
+          .select('email')
+          .eq('id', trip.sender_id)
+          .maybeSingle()
+        if (sData?.email) {
+          targetEmail = sData.email
         }
       }
 
+      // Se ainda não encontrou e temos o nome do remetente salvo na viagem
+      if (!targetEmail && trip.sender) {
+        let sQuery = supabase
+          .from('senders')
+          .select('name, email')
+          .not('email', 'is', null)
+
+        if (trip.organization_id) {
+          sQuery = sQuery.eq('organization_id', trip.organization_id)
+        }
+
+        const { data: senderList } = await sQuery
+        if (senderList && senderList.length > 0) {
+          const sLower = trip.sender.toLowerCase()
+          const matched = senderList.find((s: any) => {
+            if (!s.email) return false
+            const sName = (s.name || '').toLowerCase()
+            return sLower.includes(sName) || sName.includes(sLower)
+          })
+          if (matched?.email) {
+            targetEmail = matched.email
+          }
+        }
+      }
+
+      // Fallback seguro caso o remetente não possua e-mail configurado
       if (!targetEmail) {
         targetEmail = trip.recipient_email || null
-      }
-      if (!targetEmail && Array.isArray(trip.recipients)) {
-        const found = trip.recipients.find((r: any) => r.email && r.email.includes('@'))
-        if (found) targetEmail = found.email
       }
 
       if (targetEmail) {
@@ -2055,7 +2125,7 @@ export async function getSenders(organizationId?: string) {
   const supabase = await createClient()
   const { data, error } = await supabase
     .from('senders')
-    .select('id, name, cnpj, ie, address, city, zip_code, phone, franchise_hours, demurrage_hourly_rate, company_id, created_at, companies(name), recipients(*)')
+    .select('id, name, cnpj, ie, address, city, zip_code, phone, email, franchise_hours, demurrage_hourly_rate, company_id, created_at, companies(name), recipients(*)')
     .eq('organization_id', targetOrgId)
     .order('created_at', { ascending: false })
 
@@ -2094,6 +2164,7 @@ export async function createSender(formData: FormData) {
   const cnpj = ((formData.get('cnpj') as string) || '').trim()
   const ie = ((formData.get('ie') as string) || '').trim()
   const phone = ((formData.get('phone') as string) || '').trim()
+  const email = ((formData.get('email') as string) || '').trim().toLowerCase()
   const rawFranchise = formData.get('franchise_hours') ? parseFloat(formData.get('franchise_hours') as string) : 0
   const franchise_hours = isNaN(rawFranchise) || rawFranchise < 0 ? 0 : rawFranchise
   const rawDemurrage = formData.get('demurrage_hourly_rate') ? parseFloat(formData.get('demurrage_hourly_rate') as string) : 0
@@ -2101,6 +2172,10 @@ export async function createSender(formData: FormData) {
 
   if (!name || name.length < 3) {
     return { error: 'Razão Social / Nome do Remetente deve ter pelo menos 3 caracteres.' }
+  }
+
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return { error: 'Formato de e-mail inválido para o remetente.' }
   }
 
   const { data, error } = await supabase
@@ -2115,12 +2190,13 @@ export async function createSender(formData: FormData) {
         cnpj: cnpj || null,
         ie: ie || null,
         phone: phone || null,
+        email: email || null,
         franchise_hours,
         demurrage_hourly_rate,
         organization_id: user.organization_id,
       },
     ])
-    .select('id, name, cnpj, ie, address, city, zip_code, phone, franchise_hours, demurrage_hourly_rate, company_id, created_at, companies(name), recipients(*)')
+    .select('id, name, cnpj, ie, address, city, zip_code, phone, email, franchise_hours, demurrage_hourly_rate, company_id, created_at, companies(name), recipients(*)')
     .single()
 
   if (error) return { error: error.message }
@@ -2157,6 +2233,7 @@ export async function updateSender(id: string, formData: FormData) {
   const cnpj = ((formData.get('cnpj') as string) || '').trim()
   const ie = ((formData.get('ie') as string) || '').trim()
   const phone = ((formData.get('phone') as string) || '').trim()
+  const email = ((formData.get('email') as string) || '').trim().toLowerCase()
   const rawFranchise = formData.get('franchise_hours') ? parseFloat(formData.get('franchise_hours') as string) : 0
   const franchise_hours = isNaN(rawFranchise) || rawFranchise < 0 ? 0 : rawFranchise
   const rawDemurrage = formData.get('demurrage_hourly_rate') ? parseFloat(formData.get('demurrage_hourly_rate') as string) : 0
@@ -2164,6 +2241,10 @@ export async function updateSender(id: string, formData: FormData) {
 
   if (!name || name.length < 3) {
     return { error: 'Razão Social / Nome do Remetente deve ter pelo menos 3 caracteres.' }
+  }
+
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    return { error: 'Formato de e-mail inválido para o remetente.' }
   }
 
   const { data, error } = await supabase
@@ -2177,12 +2258,13 @@ export async function updateSender(id: string, formData: FormData) {
       cnpj: cnpj || null,
       ie: ie || null,
       phone: phone || null,
+      email: email || null,
       franchise_hours,
       demurrage_hourly_rate,
     })
     .eq('id', id)
     .eq('organization_id', user.organization_id)
-    .select('id, name, cnpj, ie, address, city, zip_code, phone, franchise_hours, demurrage_hourly_rate, company_id, created_at, companies(name), recipients(*)')
+    .select('id, name, cnpj, ie, address, city, zip_code, phone, email, franchise_hours, demurrage_hourly_rate, company_id, created_at, companies(name), recipients(*)')
     .single()
 
   if (error) return { error: error.message }

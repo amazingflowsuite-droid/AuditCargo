@@ -500,7 +500,7 @@ export async function sendArrivalEmail(data: ArrivalEmailData): Promise<{
   if (!data.toEmail || !data.toEmail.includes('@')) {
     return {
       success: false,
-      error: 'Destinatário não possui e-mail cadastrado.',
+      error: 'Remetente não possui e-mail cadastrado.',
     }
   }
 
@@ -624,7 +624,7 @@ export async function sendCompletionEmail(data: CompletionEmailData): Promise<{
   if (!data.toEmail || !data.toEmail.includes('@')) {
     return {
       success: false,
-      error: 'Destinatário não possui e-mail cadastrado.',
+      error: 'Remetente não possui e-mail cadastrado.',
     }
   }
 

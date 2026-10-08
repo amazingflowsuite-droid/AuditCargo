@@ -54,6 +54,7 @@ const CreateSenderForm = memo(function CreateSenderForm({
   const [cnpj, setCnpj] = useState('')
   const [ie, setIe] = useState('')
   const [phone, setPhone] = useState('')
+  const [email, setEmail] = useState('')
   const [franchiseHours, setFranchiseHours] = useState('0')
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -73,6 +74,7 @@ const CreateSenderForm = memo(function CreateSenderForm({
     formData.append('cnpj', cnpj)
     formData.append('ie', ie)
     formData.append('phone', phone)
+    formData.append('email', email)
     formData.append('franchise_hours', franchiseHours)
 
     startTransition(async () => {
@@ -89,6 +91,7 @@ const CreateSenderForm = memo(function CreateSenderForm({
         setCnpj('')
         setIe('')
         setPhone('')
+        setEmail('')
         setFranchiseHours('0')
       }
     })
@@ -191,6 +194,17 @@ const CreateSenderForm = memo(function CreateSenderForm({
             </div>
           </div>
 
+          <div className="space-y-1">
+            <Label htmlFor="create_email">E-mail para Notificações</Label>
+            <Input
+              id="create_email"
+              type="email"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              placeholder="Ex: notificacao@remetente.com.br"
+            />
+          </div>
+
           <div className="grid grid-cols-2 gap-2">
             <div className="space-y-1">
               <Label htmlFor="create_phone">Telefone / Fone</Label>
@@ -202,16 +216,22 @@ const CreateSenderForm = memo(function CreateSenderForm({
               />
             </div>
             <div className="space-y-1">
-              <Label htmlFor="create_franchise">Franquia de Espera (Horas)</Label>
-              <Input
-                id="create_franchise"
-                type="number"
-                step="0.5"
-                min="0"
-                value={franchiseHours}
-                onChange={(e) => setFranchiseHours(e.target.value)}
-                placeholder="Ex: 4"
-              />
+              <Label htmlFor="create_franchise">Franquia de Espera</Label>
+              <div className="relative">
+                <Input
+                  id="create_franchise"
+                  type="number"
+                  step="0.5"
+                  min="0"
+                  value={franchiseHours}
+                  onChange={(e) => setFranchiseHours(e.target.value)}
+                  placeholder="0"
+                  className="pr-12"
+                />
+                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-mono text-[#78716C] pointer-events-none select-none">
+                  horas
+                </span>
+              </div>
             </div>
           </div>
 
@@ -416,6 +436,7 @@ const SenderCard = memo(function SenderCard({
   const [editCnpj, setEditCnpj] = useState(formatCNPJ(sender.cnpj || ''))
   const [editIe, setEditIe] = useState(sender.ie || '')
   const [editPhone, setEditPhone] = useState(formatPhone(sender.phone || ''))
+  const [editEmail, setEditEmail] = useState(sender.email || '')
   const [editFranchiseHours, setEditFranchiseHours] = useState(
     sender.franchise_hours !== undefined ? String(sender.franchise_hours) : '0'
   )
@@ -438,6 +459,7 @@ const SenderCard = memo(function SenderCard({
     formData.append('cnpj', editCnpj)
     formData.append('ie', editIe)
     formData.append('phone', editPhone)
+    formData.append('email', editEmail)
     formData.append('franchise_hours', editFranchiseHours)
 
     onSaveEdit(formData)
@@ -524,6 +546,27 @@ const SenderCard = memo(function SenderCard({
                 />
               </div>
               <div>
+                <Label className="text-[11px]">CEP</Label>
+                <Input
+                  value={editZipCode}
+                  onChange={(e) => setEditZipCode(formatCEP(e.target.value))}
+                  placeholder="00000-000"
+                  className="h-8 text-xs mt-0.5"
+                />
+              </div>
+            </div>
+            <div>
+              <Label className="text-[11px]">E-mail para Notificações</Label>
+              <Input
+                type="email"
+                value={editEmail}
+                onChange={(e) => setEditEmail(e.target.value)}
+                placeholder="Ex: notificacao@remetente.com.br"
+                className="h-8 text-xs mt-0.5"
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-1.5">
+              <div>
                 <Label className="text-[11px]">Telefone</Label>
                 <Input
                   value={editPhone}
@@ -531,18 +574,21 @@ const SenderCard = memo(function SenderCard({
                   className="h-8 text-xs mt-0.5"
                 />
               </div>
-            </div>
-            <div className="grid grid-cols-2 gap-1.5">
               <div>
-                <Label className="text-[11px]">Franquia de Espera (Horas)</Label>
-                <Input
-                  type="number"
-                  step="0.5"
-                  min="0"
-                  value={editFranchiseHours}
-                  onChange={(e) => setEditFranchiseHours(e.target.value)}
-                  className="h-8 text-xs mt-0.5"
-                />
+                <Label className="text-[11px]">Franquia de Espera</Label>
+                <div className="relative mt-0.5">
+                  <Input
+                    type="number"
+                    step="0.5"
+                    min="0"
+                    value={editFranchiseHours}
+                    onChange={(e) => setEditFranchiseHours(e.target.value)}
+                    className="h-8 text-xs pr-12"
+                  />
+                  <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[11px] font-mono text-[#78716C] pointer-events-none select-none">
+                    horas
+                  </span>
+                </div>
               </div>
             </div>
 
@@ -586,11 +632,17 @@ const SenderCard = memo(function SenderCard({
                 <span>{sender.city} {sender.zip_code ? `- CEP: ${formatCEP(sender.zip_code)}` : ''}</span>
               </div>
             )}
-            <div className="flex items-center gap-4">
+            <div className="flex flex-wrap items-center gap-3">
               {sender.phone && (
                 <div className="flex items-center gap-1.5 font-mono text-[11px]">
                   <Phone className="w-3 h-3 text-[#0D9488] shrink-0" />
                   <span>{formatPhone(sender.phone)}</span>
+                </div>
+              )}
+              {sender.email && (
+                <div className="flex items-center gap-1.5 font-mono text-[11px] text-[#0D9488]" title="E-mail de Notificação">
+                  <Mail className="w-3 h-3 shrink-0" />
+                  <span>{sender.email}</span>
                 </div>
               )}
               {sender.franchise_hours !== undefined && sender.franchise_hours > 0 && (

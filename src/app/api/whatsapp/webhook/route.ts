@@ -274,13 +274,136 @@ async function handleArrivedAction(tripId: string, driverPhone: string) {
       `✅ *Chegada confirmada com sucesso às ${timeFormatted}!* \n\n` +
         `Destino: *${trip.destination}*\n` +
         `A sua franquia de estadia foi iniciada oficialmente no sistema.\n\n` +
-        `O destinatário foi notificado por e-mail. Bom trabalho!`
+        `O remetente foi notificado por e-mail. Bom trabalho!`
     )
 
-    // Disparo de e-mail de aviso para o destinatário (em segundo plano)
+/**
+ * Recupera contexto completo para disparo de e-mails (empresa, filial, motorista, remetente e CCs)
+ * Idêntico à lógica das Server Actions disparadas via tela web (/v/[token])
+ */
+async function getTripEmailContext(pool: any, trip: any) {
+  // 1. Motorista
+  let driverName = 'Motorista'
+  if (trip.driver_id) {
+    const dRes = await pool.query('SELECT name, phone FROM drivers WHERE id = $1', [trip.driver_id])
+    if (dRes.rows[0]?.name) driverName = dRes.rows[0].name
+  }
+
+  // 2. Filial
+  let branchData: any = null
+  if (trip.branch_id) {
+    const bRes = await pool.query(
+      'SELECT name, code, city, state, email, phone, contact FROM branches WHERE id = $1',
+      [trip.branch_id]
+    )
+    branchData = bRes.rows[0] || null
+  }
+  if (!branchData && trip.organization_id) {
+    const bRes = await pool.query(
+      'SELECT name, code, city, state, email, phone, contact FROM branches WHERE organization_id = $1 LIMIT 1',
+      [trip.organization_id]
+    )
+    branchData = bRes.rows[0] || null
+  }
+  if (!branchData && trip.company_id) {
+    const bRes = await pool.query(
+      'SELECT name, code, city, state, email, phone, contact FROM branches WHERE company_id = $1 LIMIT 1',
+      [trip.company_id]
+    )
+    branchData = bRes.rows[0] || null
+  }
+
+  // 3. Empresa transportadora
+  let companyData: any = null
+  if (trip.company_id) {
+    const cRes = await pool.query(
+      'SELECT name, contact, phone, email, website FROM companies WHERE id = $1',
+      [trip.company_id]
+    )
+    companyData = cRes.rows[0] || null
+  }
+  if (!companyData && trip.organization_id) {
+    const cRes = await pool.query(
+      'SELECT name, contact, phone, email, website FROM companies WHERE organization_id = $1 LIMIT 1',
+      [trip.organization_id]
+    )
+    companyData = cRes.rows[0] || null
+  }
+
+  // 4. E-mails em cópia (extraCc)
+  const extraCc: string[] = []
+  if (trip.organization_id) {
     try {
-      const emailTarget = trip.recipient_email
-      if (emailTarget) {
+      const ccRes = await pool.query(
+        'SELECT email FROM notification_emails WHERE organization_id = $1 AND active = true',
+        [trip.organization_id]
+      )
+      for (const r of ccRes.rows) {
+        if (r.email && !extraCc.includes(r.email)) {
+          extraCc.push(r.email)
+        }
+      }
+    } catch (err) {
+      console.warn('Erro ao buscar CCs da organização:', err)
+    }
+  }
+
+  const branchEmail = branchData?.email?.trim() || null
+  if (branchEmail && branchEmail.includes('@') && !extraCc.includes(branchEmail)) {
+    extraCc.push(branchEmail)
+  }
+
+  // 5. Assinatura Operacional da Empresa / Filial
+  const operationalInfo = {
+    name: branchData?.name
+      ? `${companyData?.name || 'AuditCargo'} - Filial ${branchData.name}`
+      : (companyData?.name || 'AuditCargo'),
+    contact: branchData?.contact || companyData?.contact || 'Atendimento Operacional',
+    phone: branchData?.phone || companyData?.phone || undefined,
+    email: branchEmail || companyData?.email || undefined,
+    website: companyData?.website,
+  }
+
+  // 6. Nome do Remetente
+  let senderName = trip.sender
+  if (!senderName && trip.sender_id) {
+    const sRes = await pool.query('SELECT name, city FROM senders WHERE id = $1', [trip.sender_id])
+    if (sRes.rows[0]?.name) {
+      senderName = `${sRes.rows[0].name}${sRes.rows[0].city ? ` (${sRes.rows[0].city})` : ''}`
+    }
+  }
+
+  // 7. E-mail de destino (Prioridade para o Remetente)
+  let emailTarget = trip.sender_email
+  if (!emailTarget && trip.sender_id) {
+    const senderInfo = await pool.query('SELECT email FROM senders WHERE id = $1', [trip.sender_id])
+    emailTarget = senderInfo.rows[0]?.email
+  }
+  if (!emailTarget && senderName) {
+    const senderInfo = await pool.query(
+      "SELECT email FROM senders WHERE ($1 ILIKE '%' || name || '%' OR name ILIKE '%' || $1 || '%') AND email IS NOT NULL LIMIT 1",
+      [senderName]
+    )
+    emailTarget = senderInfo.rows[0]?.email
+  }
+  if (!emailTarget) {
+    emailTarget = trip.recipient_email
+  }
+
+  return {
+    driverName,
+    senderName,
+    emailTarget,
+    operationalInfo,
+    extraCc,
+  }
+}
+
+    // Disparo de e-mail de aviso para o remetente (em segundo plano)
+    try {
+      const emailCtx = await getTripEmailContext(pool, trip)
+
+      if (emailCtx.emailTarget) {
         let destName = trip.destination || 'Destinatário'
         let destCity = ''
         if (destName.includes('-')) {
@@ -289,20 +412,19 @@ async function handleArrivedAction(tripId: string, driverPhone: string) {
           destCity = parts.slice(1).join('-').trim()
         }
 
-        const driverInfo = await pool.query('SELECT name, phone FROM drivers WHERE id = $1', [
-          trip.driver_id,
-        ])
-        const driver = driverInfo.rows[0] || {}
-
         await sendArrivalEmail({
-          toEmail: emailTarget,
-          cteNumber: trip.cte_number || undefined,
-          driverName: driver.name || 'Motorista',
+          toEmail: emailCtx.emailTarget,
           destinationName: destName,
           destinationCity: destCity,
-          arrivalTime: now.toISOString(),
           invoices: trip.invoices || [],
+          arrivalTime: trip.arrival_time || now.toISOString(),
+          cteNumber: trip.cte_number || undefined,
+          driverName: emailCtx.driverName,
+          serviceType: trip.service_type || 'Estadia',
+          sender: emailCtx.senderName,
+          companyInfo: emailCtx.operationalInfo,
           checkinPhotoUrl: trip.checkin_photo_url,
+          extraCc: emailCtx.extraCc,
         })
       }
     } catch (emailErr) {

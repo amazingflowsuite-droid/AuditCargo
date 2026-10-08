@@ -128,6 +128,7 @@ export function NewTransportForm({
     const finalSenderName = `${currentSender.name} (${currentSender.city || ''})`
     const finalDestinationName = `${currentRecipient.name} - ${currentRecipient.city || ''}`
     const recipientEmail = currentRecipient.email || undefined
+    const senderEmail = currentSender.email || undefined
 
     const allInvoices = generalInvoices
       .split(',')
@@ -144,6 +145,7 @@ export function NewTransportForm({
         status,
         sender: finalSenderName,
         sender_id: currentSender.id,
+        sender_email: senderEmail,
         destination: finalDestinationName,
         invoices: Array.from(new Set(allInvoices)),
         recipient_email: recipientEmail,
@@ -604,10 +606,13 @@ export function NewTransportForm({
                 </select>
 
                 {currentSender && (
-                  <div className="p-2.5 bg-white rounded-[6px] border border-[#E7E5E4] text-xs text-[#57534E] grid grid-cols-1 sm:grid-cols-3 gap-1 font-mono">
+                  <div className="p-2.5 bg-white rounded-[6px] border border-[#E7E5E4] text-xs text-[#57534E] grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 font-mono">
                     <span>CNPJ: <strong>{currentSender.cnpj || 'Não inf.'}</strong></span>
                     <span>Município: <strong>{currentSender.city}</strong></span>
                     <span>Fone: <strong>{currentSender.phone || 'S/ Fone'}</strong></span>
+                    <span className="truncate" title={currentSender.email || 'S/ E-mail'}>
+                      E-mail: <strong>{currentSender.email || 'S/ E-mail'}</strong>
+                    </span>
                   </div>
                 )}
               </div>
