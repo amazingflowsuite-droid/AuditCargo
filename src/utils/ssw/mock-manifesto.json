@@ -1,0 +1,143 @@
+{
+  "manifestoSSW": "SSW 849201-1",
+  "chaveManifestoSSW": "3526101234567890",
+  "serieMDFe": "1",
+  "nroMDFe": 849201,
+  "chaveMDFe": "35261012345678000199580010008492011234567890",
+  "dataEmissao": "2026-10-13T10:30:00.000-03:00",
+  "dataPrevCheg": "2026-10-14T18:00:00.000-03:00",
+  "placa": "BRA2E19",
+  "placaCarreta": "CAR9A88",
+  "motorista": {
+    "cpf": "12345678909",
+    "nome": "Carlos Eduardo da Silva"
+  },
+  "ctes": [
+    {
+      "ctrcSSW": "CTRC 10041-0",
+      "serieCTe": "1",
+      "nroCTe": 10041,
+      "chaveCTe": "35261012345678000199570010000100411234567891",
+      "dataEmissao": "2026-10-13T09:00:00.000-03:00",
+      "dataPrevEnt": "2026-10-14T14:00:00.000-03:00",
+      "obs": "Entregar pela portaria 2 com agendamento prévio.",
+      "pesoReal": 450.50,
+      "cubagem": 2.10,
+      "valorMerc": 18500.00,
+      "valorFrete": 650.00,
+      "cidadeOrigem": "São Paulo",
+      "ufOrigem": "SP",
+      "cidadeDestino": "Campinas",
+      "ufDestino": "SP",
+      "emitente": {
+        "nome": "Transportadora Exemplo Logística LTDA",
+        "cpfCNPJ": "12345678000199",
+        "inscricaoEst": "111222333444"
+      },
+      "remetente": {
+        "nome": "Indústria Metalúrgica Paulista S/A",
+        "cpfCNPJ": "45678912000133",
+        "inscricaoEst": "999888777666",
+        "endereco": {
+          "rua": "Av. das Indústrias",
+          "numero": 1500,
+          "bairro": "Distrito Industrial",
+          "cep": 13000000
+        },
+        "telefone": "11 33221100"
+      },
+      "destinatario": {
+        "nome": "Centro de Distribuição Campinas LTDA",
+        "cpfCNPJ": "98765432000188",
+        "inscricaoEst": "555444333222",
+        "endereco": {
+          "rua": "Rodovia Anhanguera",
+          "numero": "KM 98",
+          "bairro": "Nova Aparecida",
+          "cep": 13060000
+        },
+        "telefone": "19 32114455"
+      },
+      "notasFiscais": [
+        {
+          "serieNFe": "1",
+          "nroNFe": 54201,
+          "chaveNFe": "35261045678912000133550010000542011234567892",
+          "dataEmissao": "2026-10-12",
+          "pedido": "PED-88120",
+          "valorMerc": 18500.00,
+          "pesoReal": 450.50,
+          "qtdeVolumes": 15
+        }
+      ]
+    },
+    {
+      "ctrcSSW": "CTRC 10042-8",
+      "serieCTe": "1",
+      "nroCTe": 10042,
+      "chaveCTe": "35261012345678000199570010000100421234567893",
+      "dataEmissao": "2026-10-13T09:15:00.000-03:00",
+      "dataPrevEnt": "2026-10-14T17:00:00.000-03:00",
+      "obs": "Recebimento somente até as 17h.",
+      "pesoReal": 820.00,
+      "cubagem": 4.50,
+      "valorMerc": 34200.00,
+      "valorFrete": 1100.00,
+      "cidadeOrigem": "São Paulo",
+      "ufOrigem": "SP",
+      "cidadeDestino": "Jundiaí",
+      "ufDestino": "SP",
+      "emitente": {
+        "nome": "Transportadora Exemplo Logística LTDA",
+        "cpfCNPJ": "12345678000199",
+        "inscricaoEst": "111222333444"
+      },
+      "remetente": {
+        "nome": "Indústria Metalúrgica Paulista S/A",
+        "cpfCNPJ": "45678912000133",
+        "inscricaoEst": "999888777666",
+        "endereco": {
+          "rua": "Av. das Indústrias",
+          "numero": 1500,
+          "bairro": "Distrito Industrial",
+          "cep": 13000000
+        },
+        "telefone": "11 33221100"
+      },
+      "destinatario": {
+        "nome": "Armazéns Gerais Jundiaí EIRELI",
+        "cpfCNPJ": "77889900000111",
+        "inscricaoEst": "333222111000",
+        "endereco": {
+          "rua": "Avenida Marginal Sul",
+          "numero": 450,
+          "bairro": "Fazenda Grande",
+          "cep": 13212000
+        },
+        "telefone": "11 45889900"
+      },
+      "notasFiscais": [
+        {
+          "serieNFe": "1",
+          "nroNFe": 54202,
+          "chaveNFe": "35261045678912000133550010000542021234567894",
+          "dataEmissao": "2026-10-12",
+          "pedido": "PED-88121",
+          "valorMerc": 21000.00,
+          "pesoReal": 500.00,
+          "qtdeVolumes": 20
+        },
+        {
+          "serieNFe": "1",
+          "nroNFe": 54203,
+          "chaveNFe": "35261045678912000133550010000542031234567895",
+          "dataEmissao": "2026-10-12",
+          "pedido": "PED-88122",
+          "valorMerc": 13200.00,
+          "pesoReal": 320.00,
+          "qtdeVolumes": 10
+        }
+      ]
+    }
+  ]
+}
