@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { createTrip, sendTelegramTripStatusPromptAction } from "../actions"
+import { DacteQuickEntry } from "@/components/DacteQuickEntry"
 import {
   Truck,
   MapPin,
@@ -48,8 +49,14 @@ export function NewTransportForm({
   const [selectedBranchId, setSelectedBranchId] = useState<string>(branches[0]?.id || '')
   const [selectedDriverId, setSelectedDriverId] = useState<string>(drivers[0]?.id || '')
   const [cteNumber, setCteNumber] = useState<string>('')
+  const [cteKey, setCteKey] = useState<string>('')
+  const [sefazMetadata, setSefazMetadata] = useState<any | null>(null)
   const [serviceType, setServiceType] = useState<string>('Estadia')
   const [status, setStatus] = useState<string>('in_transit')
+
+  // Listas ativas de remetentes e destinatários (permite injeção de novas entidades criadas no bipe de XML)
+  const [activeSenders, setActiveSenders] = useState<any[]>(senders)
+  const [activeRecipients, setActiveRecipients] = useState<any[]>(registeredRecipients)
 
   // Remetente Selecionado
   const [selectedSenderId, setSelectedSenderId] = useState<string>('')
@@ -73,8 +80,8 @@ export function NewTransportForm({
   }, [drivers, selectedCompanyId])
 
   const filteredSenders = useMemo(() => {
-    return senders.filter((s) => !selectedCompanyId || s.company_id === selectedCompanyId)
-  }, [senders, selectedCompanyId])
+    return activeSenders.filter((s) => !selectedCompanyId || s.company_id === selectedCompanyId)
+  }, [activeSenders, selectedCompanyId])
 
   // Auto-seleciona a primeira filial disponível
   useEffect(() => {
@@ -89,8 +96,8 @@ export function NewTransportForm({
   // Lista estritamente os destinatários vinculados ao remetente selecionado
   const filteredRecipients = useMemo(() => {
     if (!selectedSenderId) return []
-    return registeredRecipients.filter((r) => r.sender_id === selectedSenderId)
-  }, [registeredRecipients, selectedSenderId])
+    return activeRecipients.filter((r) => r.sender_id === selectedSenderId)
+  }, [activeRecipients, selectedSenderId])
 
   const currentDriver = useMemo(() => {
     return drivers.find((d) => d.id === selectedDriverId)
@@ -107,6 +114,70 @@ export function NewTransportForm({
   const handleSenderChange = (senderId: string) => {
     setSelectedSenderId(senderId)
     setSelectedRecipientId('')
+    setValidationError(null)
+  }
+
+  // Callbacks para o scanner óptico / bipe do DACTE
+  const handleKeyScanned = (data: {
+    cteNumber: string
+    serie: number
+    cteKey: string
+    branchId?: string
+    sefazMetadata?: any
+  }) => {
+    setCteNumber(data.cteNumber)
+    setCteKey(data.cteKey)
+    if (data.branchId) {
+      setSelectedBranchId(data.branchId)
+    }
+    if (data.sefazMetadata) {
+      setSefazMetadata(data.sefazMetadata)
+    }
+    setValidationError(null)
+  }
+
+  const handleXmlImported = (data: {
+    cteNumber: string
+    serie: number
+    cteKey: string
+    invoices: string[]
+    senderId?: string
+    recipientId?: string
+    driverId?: string
+    branchId?: string
+    sefazMetadata?: any
+    newSender?: any
+    newRecipient?: any
+  }) => {
+    setCteNumber(data.cteNumber)
+    setCteKey(data.cteKey)
+    if (data.branchId) setSelectedBranchId(data.branchId)
+    if (data.driverId) setSelectedDriverId(data.driverId)
+    if (data.sefazMetadata) setSefazMetadata(data.sefazMetadata)
+
+    if (data.newSender) {
+      setActiveSenders((prev) => {
+        const exists = prev.some((s) => s.id === data.newSender.id)
+        return exists ? prev : [data.newSender, ...prev]
+      })
+    }
+    if (data.senderId) {
+      setSelectedSenderId(data.senderId)
+    }
+
+    if (data.newRecipient) {
+      setActiveRecipients((prev) => {
+        const exists = prev.some((r) => r.id === data.newRecipient.id)
+        return exists ? prev : [data.newRecipient, ...prev]
+      })
+    }
+    if (data.recipientId) {
+      setSelectedRecipientId(data.recipientId)
+    }
+
+    if (data.invoices && data.invoices.length > 0) {
+      setGeneralInvoices(data.invoices.join(', '))
+    }
     setValidationError(null)
   }
 
@@ -141,6 +212,8 @@ export function NewTransportForm({
         branch_id: selectedBranchId || undefined,
         driver_id: selectedDriverId,
         cte_number: cteNumber,
+        cte_key: cteKey || undefined,
+        sefaz_metadata: sefazMetadata || undefined,
         service_type: serviceType,
         status,
         sender: finalSenderName,
@@ -304,6 +377,8 @@ export function NewTransportForm({
               onClick={() => {
                 setResult(null)
                 setCteNumber('')
+                setCteKey('')
+                setSefazMetadata(null)
                 setGeneralInvoices('')
                 setSelectedSenderId('')
                 setSelectedRecipientId('')
@@ -412,64 +487,96 @@ export function NewTransportForm({
   }
 
   return (
-    <Card className="max-w-3xl mx-auto shadow-sm">
-      <CardHeader>
-        <CardTitle className="text-xl font-bold flex items-center gap-2">
-          <Truck className="w-5 h-5 text-[#0D9488]" />
-          Emissão de Transporte de Carga
-        </CardTitle>
-        <CardDescription>
-          Vincule o DACTE (CT-e), tipo de serviço, remetente e destinatários cadastrados para auditoria.
-        </CardDescription>
-      </CardHeader>
+    <div className="max-w-3xl mx-auto space-y-6">
+      {/* SEÇÃO 0: LEITURA EXPRESSA VIA DACTE / BIPE DE CÓDIGO DE BARRAS (OPÇÃO C & A) */}
+      <DacteQuickEntry
+        companies={companies}
+        branches={filteredBranches}
+        drivers={filteredDrivers}
+        senders={filteredSenders}
+        recipients={activeRecipients}
+        onKeyScanned={handleKeyScanned}
+        onXmlImported={handleXmlImported}
+      />
 
-      <CardContent>
-        {drivers.length === 0 ? (
-          <div className="p-4 bg-amber-50 border border-amber-200 rounded-[6px] text-xs text-amber-900 space-y-2">
-            <p className="font-semibold">Cadastros necessários:</p>
-            <p>
-              Cadastre pelo menos um <strong>Motorista</strong> para emitir transportes.
-            </p>
-          </div>
-        ) : (
-          <form onSubmit={handleSubmit} className="space-y-6">
-            {(validationError || result?.error) && (
-              <div className="p-3.5 bg-red-50 border border-red-200 text-red-800 rounded-[6px] text-xs font-medium flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
-                  <span>{validationError || result?.error}</span>
+      <Card className="shadow-sm">
+        <CardHeader>
+          <CardTitle className="text-xl font-bold flex items-center gap-2">
+            <Truck className="w-5 h-5 text-[#0D9488]" />
+            Emissão de Transporte de Carga
+          </CardTitle>
+          <CardDescription>
+            Vincule o DACTE (CT-e), tipo de serviço, remetente e destinatários cadastrados para auditoria.
+          </CardDescription>
+        </CardHeader>
+
+        <CardContent>
+          {drivers.length === 0 ? (
+            <div className="p-4 bg-amber-50 border border-amber-200 rounded-[6px] text-xs text-amber-900 space-y-2">
+              <p className="font-semibold">Cadastros necessários:</p>
+              <p>
+                Cadastre pelo menos um <strong>Motorista</strong> para emitir transportes.
+              </p>
+            </div>
+          ) : (
+            <form onSubmit={handleSubmit} className="space-y-6">
+              {(validationError || result?.error) && (
+                <div className="p-3.5 bg-red-50 border border-red-200 text-red-800 rounded-[6px] text-xs font-medium flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-red-600 shrink-0" />
+                    <span>{validationError || result?.error}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setValidationError(null)
+                      if (result?.error) setResult(null)
+                    }}
+                    className="text-red-500 hover:text-red-700 text-xs font-bold uppercase ml-3 shrink-0"
+                  >
+                    Fechar
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setValidationError(null)
-                    if (result?.error) setResult(null)
-                  }}
-                  className="text-red-500 hover:text-red-700 text-xs font-bold uppercase ml-3 shrink-0"
-                >
-                  Fechar
-                </button>
-              </div>
-            )}
+              )}
 
-            {/* SEÇÃO 1: DADOS FISCAIS E TIPO DE SERVIÇO */}
-            <div className="space-y-3 p-4 rounded-[8px] bg-[#F5F5F4]/60 border border-[#E7E5E4]">
-              <h3 className="text-xs font-mono font-bold uppercase text-[#57534E] flex items-center gap-1.5">
-                <FileText className="w-4 h-4 text-[#0D9488]" /> 1. Fiscal & Operação
-              </h3>
+              {/* SEÇÃO 1: DADOS FISCAIS E TIPO DE SERVIÇO */}
+              <div className="space-y-3 p-4 rounded-[8px] bg-[#F5F5F4]/60 border border-[#E7E5E4]">
+                <h3 className="text-xs font-mono font-bold uppercase text-[#57534E] flex items-center gap-1.5">
+                  <FileText className="w-4 h-4 text-[#0D9488]" /> 1. Fiscal & Operação
+                </h3>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="space-y-1.5 sm:col-span-1">
-                  <Label htmlFor="cteNumber">Número / Chave DACTE (CT-e)</Label>
-                  <Input
-                    id="cteNumber"
-                    value={cteNumber}
-                    onChange={(e) => setCteNumber(e.target.value)}
-                    placeholder="Ex: CTE-99824"
-                    className="font-mono text-xs"
-                    required
-                  />
-                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="space-y-1.5 sm:col-span-1">
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="cteNumber">Número / Chave DACTE</Label>
+                      {cteKey && (
+                        <span className="text-[10px] font-mono text-[#0D9488] font-bold">
+                          [44D OK]
+                        </span>
+                      )}
+                    </div>
+                    <Input
+                      id="cteNumber"
+                      value={cteNumber}
+                      onChange={(e) => setCteNumber(e.target.value)}
+                      placeholder="Ex: CTE-99824"
+                      className="font-mono text-xs"
+                      required
+                    />
+                    {cteKey && (
+                      <div className="text-[10px] font-mono text-[#0D9488] bg-teal-50 border border-teal-200 px-2 py-1 rounded-[4px] flex items-center justify-between">
+                        <span className="truncate" title={cteKey}>Chave: {cteKey.slice(0, 6)}...{cteKey.slice(-6)}</span>
+                        <button
+                          type="button"
+                          onClick={() => { setCteKey(''); setSefazMetadata(null); }}
+                          className="text-stone-400 hover:text-stone-700 ml-1 font-bold"
+                          title="Desvincular chave"
+                        >
+                          &times;
+                        </button>
+                      </div>
+                    )}
+                  </div>
 
                 <div className="space-y-1.5 sm:col-span-1">
                   <Label htmlFor="serviceType">Tipo de Serviço</Label>
@@ -690,5 +797,6 @@ export function NewTransportForm({
         )}
       </CardContent>
     </Card>
-  )
+  </div>
+)
 }

@@ -12,7 +12,7 @@ import { sendArrivalEmail, sendCompletionEmail } from '@/utils/mailer'
 import { sendTripWhatsAppPrompt } from '@/utils/whatsapp'
 import { sendTripTelegramPrompt, getTelegramTripDeepLink } from '@/utils/telegram'
 import { formatCNPJ, EMAIL_REGEX } from '@/utils/masks'
-import { syncSefazDocuments } from '@/utils/sefaz/sync-service'
+import { syncSefazDocuments, parseCTeXml } from '@/utils/sefaz/sync-service'
 import crypto from 'crypto'
 
 // ==========================================
@@ -1023,11 +1023,271 @@ export async function syncSefazAction() {
   }
 }
 
+/**
+ * ⚡ Consulta e Decodifica Chave de 44 dígitos do DACTE (Bipe / Leitor Óptico)
+ */
+export async function lookupCteByKeyAction(cteKey: string) {
+  try {
+    const user = await requireAuth()
+    const orgId = user.organization_id
+    if (!orgId) return { success: false, error: 'Sessão do usuário não identificada.' }
+
+    const cleanKey = (cteKey || '').replace(/\D/g, '')
+    if (cleanKey.length !== 44) {
+      return { success: false, error: 'A chave do CT-e deve conter exatamente 44 dígitos numéricos.' }
+    }
+
+    const cUF = cleanKey.slice(0, 2)
+    const aamm = cleanKey.slice(2, 6)
+    const emitCnpj = cleanKey.slice(6, 20)
+    const mod = cleanKey.slice(20, 22)
+    const serie = parseInt(cleanKey.slice(22, 25), 10)
+    const cteNumber = String(parseInt(cleanKey.slice(25, 34), 10))
+    const tpEmis = cleanKey.slice(34, 35)
+
+    const supabase = await createClient()
+
+    // 1. Verifica se já existe uma viagem com esta chave ou número de CT-e na organização
+    const { data: existingTrip } = await supabase
+      .from('trips')
+      .select('id, token, cte_number, cte_key, created_at, destination, drivers(name)')
+      .eq('organization_id', orgId)
+      .or(`cte_key.eq.${cleanKey},cte_number.eq.${cteNumber}`)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    // 2. Tenta identificar a filial emissora cadastrada correspondente
+    const { data: branches } = await supabase
+      .from('branches')
+      .select('id, name, code, city')
+      .eq('organization_id', orgId)
+
+    let matchedBranchId: string | null = null
+    if (branches && branches.length > 0) {
+      if (emitCnpj.includes('000486')) {
+        const bGuarulhos = branches.find(
+          (b) => b.name?.toLowerCase().includes('guarulhos') || b.city?.toLowerCase().includes('guarulhos')
+        )
+        if (bGuarulhos) matchedBranchId = bGuarulhos.id
+      } else if (emitCnpj.includes('000133')) {
+        const bMatriz = branches.find(
+          (b) => b.name?.toLowerCase().includes('matriz')
+        )
+        if (bMatriz) matchedBranchId = bMatriz.id
+      }
+      if (!matchedBranchId) matchedBranchId = branches[0].id
+    }
+
+    return {
+      success: true,
+      alreadyExists: !!existingTrip,
+      existingTrip: existingTrip || null,
+      keyData: {
+        cleanKey,
+        cteNumber,
+        serie,
+        mod,
+        emitCnpj,
+        aamm: `${aamm.slice(2, 4)}/20${aamm.slice(0, 2)}`,
+        cUF,
+        tpEmis,
+      },
+      matchedBranchId,
+    }
+  } catch (err: any) {
+    console.error('Erro em lookupCteByKeyAction:', err)
+    return { success: false, error: err?.message || 'Falha ao consultar chave do CT-e.' }
+  }
+}
+
+/**
+ * 📄 Parser e Vinculador Rápido de XML de CT-e para Emissão Expressa
+ */
+export async function parseCteXmlAction(xmlContent: string, autoCreateEntities: boolean = false) {
+  try {
+    const user = await requireAuth()
+    const orgId = user.organization_id
+    if (!orgId) return { success: false, error: 'Sessão do usuário não identificada.' }
+
+    if (!xmlContent || typeof xmlContent !== 'string') {
+      return { success: false, error: 'Conteúdo XML vazio ou inválido.' }
+    }
+
+    const cteData = parseCTeXml(xmlContent)
+    if (!cteData) {
+      return { success: false, error: 'Não foi possível ler as tags do CT-e. Verifique se o arquivo é um XML de CT-e (mod 57) válido.' }
+    }
+
+    const supabase = await createClient()
+
+    // 1. Verifica se já existe viagem cadastrada com esta chave
+    const { data: existingTrip } = await supabase
+      .from('trips')
+      .select('id, token, cte_number, cte_key, created_at, destination, drivers(name)')
+      .eq('organization_id', orgId)
+      .or(`cte_key.eq.${cteData.chCTe},cte_number.eq.${cteData.nCT}`)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+
+    // 2. Busca empresa padrão para vinculação
+    const companyId = (await getOrCreateTenantCompanyId(supabase, orgId)) || null
+
+    // 3. Localiza ou cria Remetente
+    let matchedSenderId: string | null = null
+    let matchedSender: any = null
+    if (cteData.remCnpj) {
+      const cleanRemCnpj = cteData.remCnpj.replace(/\D/g, '')
+      const { data: senders } = await supabase
+        .from('senders')
+        .select('id, name, cnpj, city, phone, email')
+        .eq('organization_id', orgId)
+
+      const senderFound = senders?.find((s) => (s.cnpj || '').replace(/\D/g, '') === cleanRemCnpj)
+      if (senderFound) {
+        matchedSenderId = senderFound.id
+        matchedSender = senderFound
+      } else if (autoCreateEntities) {
+        const { data: newSender } = await supabase
+          .from('senders')
+          .insert([
+            {
+              name: cteData.remNome || 'Remetente CT-e',
+              cnpj: cteData.remCnpj,
+              address: cteData.remEndereco || null,
+              city: cteData.remCidade || null,
+              phone: cteData.remTelefone || null,
+              company_id: companyId,
+              organization_id: orgId,
+            },
+          ])
+          .select('id, name, cnpj, city, phone, email')
+          .single()
+        if (newSender) {
+          matchedSenderId = newSender.id
+          matchedSender = newSender
+        }
+      }
+    }
+
+    // 4. Localiza ou cria Destinatário
+    let matchedRecipientId: string | null = null
+    let matchedRecipient: any = null
+    if (cteData.destCnpj) {
+      const cleanDestCnpj = cteData.destCnpj.replace(/\D/g, '')
+      const { data: recipients } = await supabase
+        .from('recipients')
+        .select('id, name, cnpj, city, address, email, sender_id')
+        .eq('organization_id', orgId)
+
+      const recFound = recipients?.find((r) => (r.cnpj || '').replace(/\D/g, '') === cleanDestCnpj)
+      if (recFound) {
+        matchedRecipientId = recFound.id
+        matchedRecipient = recFound
+      } else if (autoCreateEntities && matchedSenderId) {
+        const { data: newRec } = await supabase
+          .from('recipients')
+          .insert([
+            {
+              name: cteData.destNome || 'Destinatário CT-e',
+              cnpj: cteData.destCnpj,
+              address: cteData.destEndereco || null,
+              city: cteData.destCidade || null,
+              phone: cteData.destTelefone || null,
+              sender_id: matchedSenderId,
+              company_id: companyId,
+              organization_id: orgId,
+            },
+          ])
+          .select('id, name, cnpj, city, address, email, sender_id')
+          .single()
+        if (newRec) {
+          matchedRecipientId = newRec.id
+          matchedRecipient = newRec
+        }
+      }
+    }
+
+    // 5. Localiza motorista pela placa do veículo
+    let matchedDriverId: string | null = null
+    let matchedDriverName: string | null = null
+    if (cteData.placa) {
+      const cleanPlaca = cteData.placa.replace(/[-\s]/g, '').toUpperCase()
+      const { data: drivers } = await supabase
+        .from('drivers')
+        .select('id, name, default_plate')
+        .eq('organization_id', orgId)
+
+      const driverFound = drivers?.find(
+        (d) => (d.default_plate || '').replace(/[-\s]/g, '').toUpperCase() === cleanPlaca
+      )
+      if (driverFound) {
+        matchedDriverId = driverFound.id
+        matchedDriverName = driverFound.name
+      }
+    }
+
+    // 6. Localiza filial
+    let matchedBranchId: string | null = null
+    const { data: branches } = await supabase
+      .from('branches')
+      .select('id, name, city')
+      .eq('organization_id', orgId)
+
+    if (branches && branches.length > 0 && cteData.emitCnpj) {
+      if (cteData.emitCnpj.includes('000486')) {
+        const bGuarulhos = branches.find(
+          (b) => b.name?.toLowerCase().includes('guarulhos') || b.city?.toLowerCase().includes('guarulhos')
+        )
+        if (bGuarulhos) matchedBranchId = bGuarulhos.id
+      }
+      if (!matchedBranchId) matchedBranchId = branches[0].id
+    }
+
+    const sefazMetadata = {
+      weight_kg: cteData.weightKg ?? null,
+      cargo_value: cteData.cargoValue ?? null,
+      cargo_type: cteData.cargoType ?? null,
+      freight_value: cteData.vFrete ?? null,
+      rntrc: cteData.rntrc ?? null,
+      observations: cteData.observations ?? null,
+      plate: cteData.placa ?? null,
+      emitter_cnpj: cteData.emitCnpj ?? null,
+      emitter_name: cteData.emitNome ?? null,
+      issue_date: cteData.dhEmi ?? null,
+      serie: cteData.serie ?? null,
+      origin_city: cteData.remCidade && cteData.remUf ? `${cteData.remCidade}/${cteData.remUf}` : null,
+      destination_city: cteData.destCidade && cteData.destUf ? `${cteData.destCidade}/${cteData.destUf}` : null,
+    }
+
+    return {
+      success: true,
+      alreadyExists: !!existingTrip,
+      existingTrip: existingTrip || null,
+      cteData,
+      sefazMetadata,
+      matchedSenderId,
+      matchedSender,
+      matchedRecipientId,
+      matchedRecipient,
+      matchedDriverId,
+      matchedDriverName,
+      matchedBranchId,
+    }
+  } catch (err: any) {
+    console.error('Erro em parseCteXmlAction:', err)
+    return { success: false, error: err?.message || 'Falha ao processar arquivo XML do CT-e.' }
+  }
+}
+
 export async function createTrip(payload: {
   company_id?: string
   branch_id?: string
   driver_id: string
   cte_number?: string
+  cte_key?: string
+  sefaz_metadata?: any
   service_type: string
   status: string
   sender?: string
@@ -1155,6 +1415,8 @@ export async function createTrip(payload: {
     branch_id,
     driver_id: payload.driver_id,
     cte_number: payload.cte_number?.trim() || null,
+    cte_key: payload.cte_key?.trim() || null,
+    sefaz_metadata: payload.sefaz_metadata || null,
     service_type,
     status,
     sender: payload.sender?.trim() || null,
