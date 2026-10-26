@@ -12,6 +12,7 @@ import { sendArrivalEmail, sendCompletionEmail } from '@/utils/mailer'
 import { sendTripWhatsAppPrompt } from '@/utils/whatsapp'
 import { sendTripTelegramPrompt, getTelegramTripDeepLink } from '@/utils/telegram'
 import { formatCNPJ, EMAIL_REGEX } from '@/utils/masks'
+import { syncSefazDocuments } from '@/utils/sefaz/sync-service'
 import crypto from 'crypto'
 
 // ==========================================
@@ -963,6 +964,8 @@ export async function getTrips(organizationId?: string) {
     .select(`
       id,
       cte_number,
+      cte_key,
+      recipients,
       service_type,
       status,
       sender,
@@ -994,6 +997,29 @@ export async function getTrips(organizationId?: string) {
     return []
   }
   return data || []
+}
+
+/**
+ * 🔄 Sincroniza CT-es pendentes diretamente da SEFAZ para a organização do usuário logado
+ */
+export async function syncSefazAction() {
+  try {
+    const user = await requireAuth()
+    const result = await syncSefazDocuments(user.organization_id)
+    if (result.sucesso) {
+      revalidatePath('/')
+    }
+    return result
+  } catch (err: any) {
+    return {
+      sucesso: false,
+      mensagem: err?.message || 'Falha ao sincronizar com a SEFAZ.',
+      novasViagens: 0,
+      documentosProcessados: 0,
+      ultimoNsu: '0',
+      maxNsu: '0',
+    }
+  }
 }
 
 export async function createTrip(payload: {
