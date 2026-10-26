@@ -10,7 +10,6 @@ import {
   AlertCircle,
 } from "lucide-react"
 import { TripsDashboardTable } from "@/components/TripsDashboardTable"
-import { SyncSefazButton } from "@/components/SyncSefazButton"
 
 export default async function Home() {
   const currentUser = await requireAuth()
@@ -37,8 +36,6 @@ export default async function Home() {
         </div>
 
         <div className="flex items-center gap-3">
-          <SyncSefazButton />
-
           <Link href="/novo-transporte">
             <Button className="gap-2 h-11 px-5 shadow-sm">
               <PlusCircle className="w-4 h-4 text-[#0D9488]" />

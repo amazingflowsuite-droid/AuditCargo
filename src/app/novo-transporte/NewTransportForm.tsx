@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { createTrip, sendTelegramTripStatusPromptAction } from "../actions"
-import { DacteQuickEntry } from "@/components/DacteQuickEntry"
+import { CteXmlImportCard } from "@/components/CteXmlImportCard"
 import {
   Truck,
   MapPin,
@@ -117,22 +117,13 @@ export function NewTransportForm({
     setValidationError(null)
   }
 
-  // Callbacks para o scanner óptico / bipe do DACTE
-  const handleKeyScanned = (data: {
-    cteNumber: string
-    serie: number
-    cteKey: string
-    branchId?: string
-    sefazMetadata?: any
-  }) => {
-    setCteNumber(data.cteNumber)
-    setCteKey(data.cteKey)
-    if (data.branchId) {
-      setSelectedBranchId(data.branchId)
-    }
-    if (data.sefazMetadata) {
-      setSefazMetadata(data.sefazMetadata)
-    }
+  const handleClearXml = () => {
+    setCteNumber('')
+    setCteKey('')
+    setSefazMetadata(null)
+    setGeneralInvoices('')
+    setSelectedSenderId('')
+    setSelectedRecipientId('')
     setValidationError(null)
   }
 
@@ -488,15 +479,10 @@ export function NewTransportForm({
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
-      {/* SEÇÃO 0: LEITURA EXPRESSA VIA DACTE / BIPE DE CÓDIGO DE BARRAS (OPÇÃO C & A) */}
-      <DacteQuickEntry
-        companies={companies}
-        branches={filteredBranches}
-        drivers={filteredDrivers}
-        senders={filteredSenders}
-        recipients={activeRecipients}
-        onKeyScanned={handleKeyScanned}
+      {/* IMPORTAÇÃO EXPRESSA VIA ARQUIVO XML DO CT-E */}
+      <CteXmlImportCard
         onXmlImported={handleXmlImported}
+        onClear={handleClearXml}
       />
 
       <Card className="shadow-sm">
@@ -506,7 +492,7 @@ export function NewTransportForm({
             Emissão de Transporte de Carga
           </CardTitle>
           <CardDescription>
-            Vincule o DACTE (CT-e), tipo de serviço, remetente e destinatários cadastrados para auditoria.
+            Importe o XML do CT-e emitido no SSW ou preencha os dados manualmente para auditoria.
           </CardDescription>
         </CardHeader>
 
@@ -547,24 +533,17 @@ export function NewTransportForm({
 
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div className="space-y-1.5 sm:col-span-1">
-                    <div className="flex items-center justify-between">
-                      <Label htmlFor="cteNumber">Número / Chave DACTE</Label>
-                      {cteKey && (
-                        <span className="text-[10px] font-mono text-[#0D9488] font-bold">
-                          [44D OK]
-                        </span>
-                      )}
-                    </div>
+                    <Label htmlFor="cteNumber">Número do CT-e</Label>
                     <Input
                       id="cteNumber"
                       value={cteNumber}
                       onChange={(e) => setCteNumber(e.target.value)}
-                      placeholder="Ex: CTE-99824"
+                      placeholder="Ex: 204"
                       className="font-mono text-xs"
                       required
                     />
                     {cteKey && (
-                      <div className="text-[10px] font-mono text-[#0D9488] bg-teal-50 border border-teal-200 px-2 py-1 rounded-[4px] flex items-center justify-between">
+                      <div className="text-[10px] font-mono text-[#0D9488] bg-teal-50 border border-teal-200 px-2 py-1 rounded-[4px] flex items-center justify-between mt-1">
                         <span className="truncate" title={cteKey}>Chave: {cteKey.slice(0, 6)}...{cteKey.slice(-6)}</span>
                         <button
                           type="button"
