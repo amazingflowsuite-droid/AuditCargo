@@ -363,6 +363,12 @@ export async function syncSefazDocuments(targetOrgId?: string): Promise<SefazSyn
         const cteData = parseCTeXml(doc.xml)
         if (!cteData) continue
 
+        // 🔒 Filtro Estrito: Apenas transportes onde a C Cargo é a EMITENTE direta
+        // Raiz CNPJ 07.546.152 (Matriz 0001-33 ou Filiais, ex: 0004-86 Guarulhos)
+        if (!cteData.emitCnpj || !cteData.emitCnpj.startsWith('07546152')) {
+          continue
+        }
+
         // Verifica se a viagem já existe por chave de CT-e ou número
         const existingTrip = await client.query(
           `SELECT id FROM trips WHERE (cte_key = $1 OR cte_number = $2) AND organization_id = $3 LIMIT 1`,
