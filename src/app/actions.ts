@@ -1115,59 +1115,84 @@ export async function parseCteXmlAction(xmlContent: string, autoCreateEntities: 
     // 3. Localiza ou cria Remetente
     let matchedSenderId: string | null = null
     let matchedSender: any = null
-    if (cteData.remCnpj) {
-      const cleanRemCnpj = cteData.remCnpj.replace(/\D/g, '')
-      const { data: senders } = await supabase
-        .from('senders')
-        .select('id, name, cnpj, city, phone, email')
-        .eq('organization_id', orgId)
+    const cleanRemCnpj = cteData.remCnpj ? cteData.remCnpj.replace(/\D/g, '') : ''
+    const normRemNome = (cteData.remNome || '').toLowerCase().trim()
 
-      const senderFound = senders?.find((s) => (s.cnpj || '').replace(/\D/g, '') === cleanRemCnpj)
-      if (senderFound) {
-        matchedSenderId = senderFound.id
-        matchedSender = senderFound
-      } else if (autoCreateEntities) {
-        const { data: newSender } = await supabase
-          .from('senders')
-          .insert([
-            {
-              name: cteData.remNome || 'Remetente CT-e',
-              cnpj: cteData.remCnpj,
-              address: cteData.remEndereco || null,
-              city: cteData.remCidade || null,
-              phone: cteData.remTelefone || null,
-              company_id: companyId,
-              organization_id: orgId,
-            },
-          ])
-          .select('id, name, cnpj, city, phone, email')
-          .single()
-        if (newSender) {
-          matchedSenderId = newSender.id
-          matchedSender = newSender
-        }
+    const { data: senders } = await supabase
+      .from('senders')
+      .select('id, name, cnpj, city, phone, email, company_id')
+      .eq('organization_id', orgId)
+
+    // Busca prioritária por CNPJ exato (apenas dígitos)
+    let senderFound = cleanRemCnpj
+      ? senders?.find((s) => (s.cnpj || '').replace(/\D/g, '') === cleanRemCnpj)
+      : null
+
+    // Fallback: busca por nome (caso o cadastro esteja sem CNPJ ou com formatação diferente)
+    if (!senderFound && normRemNome.length >= 3) {
+      senderFound = senders?.find((s) => {
+        const sName = (s.name || '').toLowerCase().trim()
+        return sName && (normRemNome.includes(sName) || sName.includes(normRemNome.slice(0, 15)))
+      })
+    }
+
+    if (senderFound) {
+      matchedSenderId = senderFound.id
+      matchedSender = senderFound
+    } else if (autoCreateEntities && (cteData.remCnpj || cteData.remNome)) {
+      const { data: newSender } = await supabase
+        .from('senders')
+        .insert([
+          {
+            name: cteData.remNome || 'Remetente CT-e',
+            cnpj: cteData.remCnpj || null,
+            address: cteData.remEndereco || null,
+            city: cteData.remCidade || null,
+            phone: cteData.remTelefone || null,
+            company_id: companyId,
+            organization_id: orgId,
+          },
+        ])
+        .select('id, name, cnpj, city, phone, email, company_id')
+        .single()
+      if (newSender) {
+        matchedSenderId = newSender.id
+        matchedSender = newSender
       }
     }
 
     // 4. Localiza ou cria Destinatário
     let matchedRecipientId: string | null = null
     let matchedRecipient: any = null
-    if (cteData.destCnpj) {
-      const cleanDestCnpj = cteData.destCnpj.replace(/\D/g, '')
-      const { data: recipients } = await supabase
-        .from('recipients')
-        .select('id, name, cnpj, city, address, email, sender_id')
-        .eq('organization_id', orgId)
+    const cleanDestCnpj = cteData.destCnpj ? cteData.destCnpj.replace(/\D/g, '') : ''
+    const normDestNome = (cteData.destNome || '').toLowerCase().trim()
 
-      const recFound = recipients?.find((r) => (r.cnpj || '').replace(/\D/g, '') === cleanDestCnpj)
-      if (recFound) {
-        matchedRecipientId = recFound.id
-        matchedRecipient = recFound
-      } else if (autoCreateEntities && matchedSenderId) {
-        const { data: newRec } = await supabase
-          .from('recipients')
-          .insert([
-            {
+    const { data: recipients } = await supabase
+      .from('recipients')
+      .select('id, name, cnpj, city, address, email, sender_id, company_id')
+      .eq('organization_id', orgId)
+
+    // Busca prioritária por CNPJ do destinatário
+    let recFound = cleanDestCnpj
+      ? recipients?.find((r) => (r.cnpj || '').replace(/\D/g, '') === cleanDestCnpj)
+      : null
+
+    // Fallback por nome
+    if (!recFound && normDestNome.length >= 3) {
+      recFound = recipients?.find((r) => {
+        const rName = (r.name || '').toLowerCase().trim()
+        return rName && (normDestNome.includes(rName) || rName.includes(normDestNome.slice(0, 15)))
+      })
+    }
+
+    if (recFound) {
+      matchedRecipientId = recFound.id
+      matchedRecipient = recFound
+    } else if (autoCreateEntities && matchedSenderId && (cteData.destCnpj || cteData.destNome)) {
+      const { data: newRec } = await supabase
+        .from('recipients')
+        .insert([
+          {
               name: cteData.destNome || 'Destinatário CT-e',
               cnpj: cteData.destCnpj,
               address: cteData.destEndereco || null,
@@ -1184,7 +1209,6 @@ export async function parseCteXmlAction(xmlContent: string, autoCreateEntities: 
           matchedRecipientId = newRec.id
           matchedRecipient = newRec
         }
-      }
     }
 
     // 5. Localiza motorista pela placa do veículo

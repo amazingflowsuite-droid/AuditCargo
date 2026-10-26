@@ -80,8 +80,10 @@ export function NewTransportForm({
   }, [drivers, selectedCompanyId])
 
   const filteredSenders = useMemo(() => {
-    return activeSenders.filter((s) => !selectedCompanyId || s.company_id === selectedCompanyId)
-  }, [activeSenders, selectedCompanyId])
+    return activeSenders.filter(
+      (s) => !s.company_id || !selectedCompanyId || s.company_id === selectedCompanyId || s.id === selectedSenderId
+    )
+  }, [activeSenders, selectedCompanyId, selectedSenderId])
 
   // Auto-seleciona a primeira filial disponível
   useEffect(() => {
@@ -93,11 +95,13 @@ export function NewTransportForm({
     }
   }, [selectedCompanyId, filteredBranches, selectedBranchId])
 
-  // Lista estritamente os destinatários vinculados ao remetente selecionado
+  // Lista os destinatários vinculados ao remetente selecionado (ou o destinatário selecionado pelo XML)
   const filteredRecipients = useMemo(() => {
     if (!selectedSenderId) return []
-    return activeRecipients.filter((r) => r.sender_id === selectedSenderId)
-  }, [activeRecipients, selectedSenderId])
+    return activeRecipients.filter(
+      (r) => !r.sender_id || r.sender_id === selectedSenderId || r.id === selectedRecipientId
+    )
+  }, [activeRecipients, selectedSenderId, selectedRecipientId])
 
   const currentDriver = useMemo(() => {
     return drivers.find((d) => d.id === selectedDriverId)

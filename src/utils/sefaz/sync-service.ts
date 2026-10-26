@@ -23,53 +23,81 @@ function cleanDigits(value?: string | null): string {
  */
 export function parseCTeXml(xmlContent: string): ParsedCTeData | null {
   try {
-    const chCTe = xmlContent.match(/Id="CTe(\d+)"/)?.[1] || xmlContent.match(/<chCTe>(\d+)<\/chCTe>/)?.[1]
-    const nCT = xmlContent.match(/<nCT>(.*?)<\/nCT>/)?.[1]
+    const chCTe = xmlContent.match(/Id="CTe(\d+)"/i)?.[1] || xmlContent.match(/<(?:\w+:)?chCTe>(\d+)<\/(?:\w+:)?chCTe>/i)?.[1]
+    const nCT = xmlContent.match(/<(?:\w+:)?nCT>(.*?)<\/(?:\w+:)?nCT>/i)?.[1]
 
     if (!chCTe || !nCT) return null
 
-    const serie = xmlContent.match(/<serie>(.*?)<\/serie>/)?.[1]
-    const dhEmi = xmlContent.match(/<dhEmi>(.*?)<\/dhEmi>/)?.[1]
+    const serie = xmlContent.match(/<(?:\w+:)?serie>(.*?)<\/(?:\w+:)?serie>/i)?.[1]
+    const dhEmi = xmlContent.match(/<(?:\w+:)?dhEmi>(.*?)<\/(?:\w+:)?dhEmi>/i)?.[1]
 
-    // Emitente
-    const emitCnpj = cleanDigits(xmlContent.match(/<emit>[\s\S]*?<CNPJ>(.*?)<\/CNPJ>/)?.[1])
-    const emitNome = xmlContent.match(/<emit>[\s\S]*?<xNome>(.*?)<\/xNome>/)?.[1]
+    // 1. Isolação estrita do bloco EMITENTE (<emit>...</emit>)
+    const emitBlock = xmlContent.match(/<(?:\w+:)?emit\b[^>]*>([\s\S]*?)<\/(?:\w+:)?emit>/i)?.[1] || ''
+    const emitCnpj = cleanDigits(emitBlock.match(/<(?:\w+:)?CNPJ>(.*?)<\/(?:\w+:)?CNPJ>/i)?.[1])
+    const emitNome = emitBlock.match(/<(?:\w+:)?xNome>(.*?)<\/(?:\w+:)?xNome>/i)?.[1]
 
-    // Remetente
+    // 2. Isolação estrita do bloco REMETENTE (<rem>...</rem>)
+    const remBlock = xmlContent.match(/<(?:\w+:)?rem\b[^>]*>([\s\S]*?)<\/(?:\w+:)?rem>/i)?.[1] || ''
+    // Fallback para Expedidor (<exped>) se <rem> não existir
+    const expedBlock = xmlContent.match(/<(?:\w+:)?exped\b[^>]*>([\s\S]*?)<\/(?:\w+:)?exped>/i)?.[1] || ''
+    const activeRemBlock = remBlock || expedBlock
+
     const remCnpj = cleanDigits(
-      xmlContent.match(/<rem>[\s\S]*?<CNPJ>(.*?)<\/CNPJ>/)?.[1] ||
-      xmlContent.match(/<rem>[\s\S]*?<CPF>(.*?)<\/CPF>/)?.[1]
+      activeRemBlock.match(/<(?:\w+:)?CNPJ>(.*?)<\/(?:\w+:)?CNPJ>/i)?.[1] ||
+      activeRemBlock.match(/<(?:\w+:)?CPF>(.*?)<\/(?:\w+:)?CPF>/i)?.[1]
     )
-    const remNome = xmlContent.match(/<rem>[\s\S]*?<xNome>(.*?)<\/xNome>/)?.[1]
-    const remLgr = xmlContent.match(/<rem>[\s\S]*?<xLgr>(.*?)<\/xLgr>/)?.[1] || ''
-    const remNro = xmlContent.match(/<rem>[\s\S]*?<nro>(.*?)<\/nro>/)?.[1] || ''
-    const remBairro = xmlContent.match(/<rem>[\s\S]*?<xBairro>(.*?)<\/xBairro>/)?.[1] || ''
-    const remCidade = xmlContent.match(/<rem>[\s\S]*?<xMun>(.*?)<\/xMun>/)?.[1] || ''
-    const remUf = xmlContent.match(/<rem>[\s\S]*?<UF>(.*?)<\/UF>/)?.[1] || ''
-    const remTelefone = xmlContent.match(/<rem>[\s\S]*?<fone>(.*?)<\/fone>/)?.[1] || ''
+    const remNome = activeRemBlock.match(/<(?:\w+:)?xNome>(.*?)<\/(?:\w+:)?xNome>/i)?.[1]
+    const remLgr = activeRemBlock.match(/<(?:\w+:)?xLgr>(.*?)<\/(?:\w+:)?xLgr>/i)?.[1] || ''
+    const remNro = activeRemBlock.match(/<(?:\w+:)?nro>(.*?)<\/(?:\w+:)?nro>/i)?.[1] || ''
+    const remBairro = activeRemBlock.match(/<(?:\w+:)?xBairro>(.*?)<\/(?:\w+:)?xBairro>/i)?.[1] || ''
+    const remCidade = activeRemBlock.match(/<(?:\w+:)?xMun>(.*?)<\/(?:\w+:)?xMun>/i)?.[1] || ''
+    const remUf = activeRemBlock.match(/<(?:\w+:)?UF>(.*?)<\/(?:\w+:)?UF>/i)?.[1] || ''
+    const remTelefone = activeRemBlock.match(/<(?:\w+:)?fone>(.*?)<\/(?:\w+:)?fone>/i)?.[1] || ''
 
-    // Destinatário
+    // 3. Isolação estrita do bloco DESTINATÁRIO (<dest>...</dest>)
+    const destBlock = xmlContent.match(/<(?:\w+:)?dest\b[^>]*>([\s\S]*?)<\/(?:\w+:)?dest>/i)?.[1] || ''
+    const recebBlock = xmlContent.match(/<(?:\w+:)?receb\b[^>]*>([\s\S]*?)<\/(?:\w+:)?receb>/i)?.[1] || ''
+    const activeDestBlock = destBlock || recebBlock
+
     const destCnpj = cleanDigits(
-      xmlContent.match(/<dest>[\s\S]*?<CNPJ>(.*?)<\/CNPJ>/)?.[1] ||
-      xmlContent.match(/<dest>[\s\S]*?<CPF>(.*?)<\/CPF>/)?.[1]
+      activeDestBlock.match(/<(?:\w+:)?CNPJ>(.*?)<\/(?:\w+:)?CNPJ>/i)?.[1] ||
+      activeDestBlock.match(/<(?:\w+:)?CPF>(.*?)<\/(?:\w+:)?CPF>/i)?.[1]
     )
-    const destNome = xmlContent.match(/<dest>[\s\S]*?<xNome>(.*?)<\/xNome>/)?.[1]
-    const destLgr = xmlContent.match(/<dest>[\s\S]*?<xLgr>(.*?)<\/xLgr>/)?.[1] || ''
-    const destNro = xmlContent.match(/<dest>[\s\S]*?<nro>(.*?)<\/nro>/)?.[1] || ''
-    const destBairro = xmlContent.match(/<dest>[\s\S]*?<xBairro>(.*?)<\/xBairro>/)?.[1] || ''
-    const destCidade = xmlContent.match(/<dest>[\s\S]*?<xMun>(.*?)<\/xMun>/)?.[1] || ''
-    const destUf = xmlContent.match(/<dest>[\s\S]*?<UF>(.*?)<\/UF>/)?.[1] || ''
-    const destTelefone = xmlContent.match(/<dest>[\s\S]*?<fone>(.*?)<\/fone>/)?.[1] || ''
+    const destNome = activeDestBlock.match(/<(?:\w+:)?xNome>(.*?)<\/(?:\w+:)?xNome>/i)?.[1]
+    const destLgr = activeDestBlock.match(/<(?:\w+:)?xLgr>(.*?)<\/(?:\w+:)?xLgr>/i)?.[1] || ''
+    const destNro = activeDestBlock.match(/<(?:\w+:)?nro>(.*?)<\/(?:\w+:)?nro>/i)?.[1] || ''
+    const destBairro = activeDestBlock.match(/<(?:\w+:)?xBairro>(.*?)<\/(?:\w+:)?xBairro>/i)?.[1] || ''
+    const destCidade = activeDestBlock.match(/<(?:\w+:)?xMun>(.*?)<\/(?:\w+:)?xMun>/i)?.[1] || ''
+    const destUf = activeDestBlock.match(/<(?:\w+:)?UF>(.*?)<\/(?:\w+:)?UF>/i)?.[1] || ''
+    const destTelefone = activeDestBlock.match(/<(?:\w+:)?fone>(.*?)<\/(?:\w+:)?fone>/i)?.[1] || ''
 
-    // Frete
-    const vRecStr = xmlContent.match(/<vTPrest>[\s\S]*?<vRec>(.*?)<\/vRec>/)?.[1]
+    // 4. Tomador do serviço (<toma3> ou <toma4>)
+    const tomadorTipo = xmlContent.match(/<(?:\w+:)?toma3>[\s\S]*?<(?:\w+:)?toma>(\d+)<\/(?:\w+:)?toma>/i)?.[1]
+    let tomadorNome = ''
+    let tomadorCnpj = ''
+    if (tomadorTipo === '0') {
+      tomadorNome = remNome || ''
+      tomadorCnpj = remCnpj || ''
+    } else if (tomadorTipo === '3') {
+      tomadorNome = destNome || ''
+      tomadorCnpj = destCnpj || ''
+    } else {
+      const toma4Block = xmlContent.match(/<(?:\w+:)?toma4\b[^>]*>([\s\S]*?)<\/(?:\w+:)?toma4>/i)?.[1]
+      if (toma4Block) {
+        tomadorCnpj = cleanDigits(toma4Block.match(/<(?:\w+:)?CNPJ>(.*?)<\/(?:\w+:)?CNPJ>/i)?.[1])
+        tomadorNome = toma4Block.match(/<(?:\w+:)?xNome>(.*?)<\/(?:\w+:)?xNome>/i)?.[1] || ''
+      }
+    }
+
+    // 5. Frete
+    const vRecStr = xmlContent.match(/<(?:\w+:)?vTPrest>[\s\S]*?<(?:\w+:)?vRec>(.*?)<\/(?:\w+:)?vRec>/i)?.[1] ||
+                    xmlContent.match(/<(?:\w+:)?vTPrest>(.*?)<\/(?:\w+:)?vTPrest>/i)?.[1]
     const vFrete = vRecStr ? parseFloat(vRecStr) : undefined
 
-    // Notas Fiscais
+    // 6. Notas Fiscais
     const invoices: string[] = []
-    const chNFeMatches = [...xmlContent.matchAll(/<chave>(.*?)<\/chave>/g)].map((m) => m[1])
+    const chNFeMatches = [...xmlContent.matchAll(/<(?:\w+:)?chave>(.*?)<\/(?:\w+:)?chave>/gi)].map((m) => m[1])
     for (const key of chNFeMatches) {
-      // Extrai número da nota (posições 25 a 34 da chave de 44 dígitos)
       if (key.length === 44) {
         const nfNum = parseInt(key.slice(25, 34), 10)
         invoices.push(String(nfNum))
@@ -78,32 +106,37 @@ export function parseCTeXml(xmlContent: string): ParsedCTeData | null {
       }
     }
 
-    // Também verifica tags antigas de NF comum (<nNF> ou <nDoc>)
-    const nNfMatches = [...xmlContent.matchAll(/<nNF>(.*?)<\/nNF>/g)].map((m) => m[1])
+    const nNfMatches = [...xmlContent.matchAll(/<(?:\w+:)?nNF>(.*?)<\/(?:\w+:)?nNF>/gi)].map((m) => m[1])
     for (const nf of nNfMatches) {
       if (!invoices.includes(nf)) invoices.push(nf)
     }
 
-    // Placa (tag direta ou tag ObsCont)
-    let placa = xmlContent.match(/<placa>(.*?)<\/placa>/)?.[1]?.toUpperCase()
+    // 7. Placa
+    let placa = xmlContent.match(/<(?:\w+:)?placa>(.*?)<\/(?:\w+:)?placa>/i)?.[1]?.toUpperCase()
     if (!placa) {
-      placa = xmlContent.match(/xCampo="PLACA"[\s\S]*?<xTexto>(.*?)<\/xTexto>/i)?.[1]?.toUpperCase()
+      placa = xmlContent.match(/xCampo="PLACA"[\s\S]*?<(?:\w+:)?xTexto>(.*?)<\/(?:\w+:)?xTexto>/i)?.[1]?.toUpperCase()
     }
 
-    // Dados de Carga (Peso, Valor da Mercadoria, Produto Predominante)
-    const qCargaStr = xmlContent.match(/<qCarga>(.*?)<\/qCarga>/)?.[1]
-    const weightKg = qCargaStr ? parseFloat(qCargaStr) : undefined
+    // 8. Peso Real da Carga (busca especificamente PESO REAL ou PESO BRUTO ou unidade de peso cUnid 01)
+    let weightKg: number | undefined
+    const pesoRealMatch = xmlContent.match(/<(?:\w+:)?tpMed>(?:PESO REAL|PESO BRUTO|PESO BASE DE CALCULO)<\/(?:\w+:)?tpMed>[\s\S]*?<(?:\w+:)?qCarga>(.*?)<\/(?:\w+:)?qCarga>/i)
+    if (pesoRealMatch) {
+      weightKg = parseFloat(pesoRealMatch[1])
+    } else {
+      const cUnid01Match = xmlContent.match(/<(?:\w+:)?cUnid>01<\/(?:\w+:)?cUnid>[\s\S]*?<(?:\w+:)?qCarga>(.*?)<\/(?:\w+:)?qCarga>/i)
+      if (cUnid01Match) {
+        weightKg = parseFloat(cUnid01Match[1])
+      } else {
+        const anyQCarga = xmlContent.match(/<(?:\w+:)?qCarga>(.*?)<\/(?:\w+:)?qCarga>/i)?.[1]
+        if (anyQCarga) weightKg = parseFloat(anyQCarga)
+      }
+    }
 
-    const vCargaStr = xmlContent.match(/<vCarga>(.*?)<\/vCarga>/)?.[1]
+    const vCargaStr = xmlContent.match(/<(?:\w+:)?vCarga>(.*?)<\/(?:\w+:)?vCarga>/i)?.[1]
     const cargoValue = vCargaStr ? parseFloat(vCargaStr) : undefined
-
-    const cargoType = xmlContent.match(/<proPred>(.*?)<\/proPred>/)?.[1]
-
-    // RNTRC
-    const rntrc = xmlContent.match(/<RNTRC>(.*?)<\/RNTRC>/)?.[1]
-
-    // Observações da Minuta / SEFAZ
-    const observations = xmlContent.match(/<xObs>([\s\S]*?)<\/xObs>/)?.[1]?.trim()
+    const cargoType = xmlContent.match(/<(?:\w+:)?proPred>(.*?)<\/(?:\w+:)?proPred>/i)?.[1]
+    const rntrc = xmlContent.match(/<(?:\w+:)?RNTRC>(.*?)<\/(?:\w+:)?RNTRC>/i)?.[1]
+    const observations = xmlContent.match(/<(?:\w+:)?xObs>([\s\S]*?)<\/(?:\w+:)?xObs>/i)?.[1]?.trim()
 
     const remEndereco = [remLgr, remNro ? `nº ${remNro}` : '', remBairro].filter(Boolean).join(', ')
     const destEndereco = [destLgr, destNro ? `nº ${destNro}` : '', destBairro].filter(Boolean).join(', ')
@@ -127,6 +160,9 @@ export function parseCTeXml(xmlContent: string): ParsedCTeData | null {
       destCidade,
       destUf,
       destTelefone,
+      tomadorTipo,
+      tomadorNome,
+      tomadorCnpj,
       vFrete,
       invoices,
       placa,

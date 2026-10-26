@@ -17,6 +17,9 @@ export interface ParsedCTeData {
   destCidade?: string
   destUf?: string
   destTelefone?: string
+  tomadorTipo?: string
+  tomadorNome?: string
+  tomadorCnpj?: string
   vFrete?: number
   invoices: string[]
   placa?: string
