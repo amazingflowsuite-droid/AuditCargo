@@ -84,8 +84,26 @@ export function parseCTeXml(xmlContent: string): ParsedCTeData | null {
       if (!invoices.includes(nf)) invoices.push(nf)
     }
 
-    // Placa
-    const placa = xmlContent.match(/<placa>(.*?)<\/placa>/)?.[1]?.toUpperCase()
+    // Placa (tag direta ou tag ObsCont)
+    let placa = xmlContent.match(/<placa>(.*?)<\/placa>/)?.[1]?.toUpperCase()
+    if (!placa) {
+      placa = xmlContent.match(/xCampo="PLACA"[\s\S]*?<xTexto>(.*?)<\/xTexto>/i)?.[1]?.toUpperCase()
+    }
+
+    // Dados de Carga (Peso, Valor da Mercadoria, Produto Predominante)
+    const qCargaStr = xmlContent.match(/<qCarga>(.*?)<\/qCarga>/)?.[1]
+    const weightKg = qCargaStr ? parseFloat(qCargaStr) : undefined
+
+    const vCargaStr = xmlContent.match(/<vCarga>(.*?)<\/vCarga>/)?.[1]
+    const cargoValue = vCargaStr ? parseFloat(vCargaStr) : undefined
+
+    const cargoType = xmlContent.match(/<proPred>(.*?)<\/proPred>/)?.[1]
+
+    // RNTRC
+    const rntrc = xmlContent.match(/<RNTRC>(.*?)<\/RNTRC>/)?.[1]
+
+    // Observações da Minuta / SEFAZ
+    const observations = xmlContent.match(/<xObs>([\s\S]*?)<\/xObs>/)?.[1]?.trim()
 
     const remEndereco = [remLgr, remNro ? `nº ${remNro}` : '', remBairro].filter(Boolean).join(', ')
     const destEndereco = [destLgr, destNro ? `nº ${destNro}` : '', destBairro].filter(Boolean).join(', ')
@@ -112,6 +130,11 @@ export function parseCTeXml(xmlContent: string): ParsedCTeData | null {
       vFrete,
       invoices,
       placa,
+      weightKg,
+      cargoValue,
+      cargoType,
+      rntrc,
+      observations,
     }
   } catch (err) {
     console.warn('⚠️ [Parser CT-e] Falha ao processar XML de CT-e:', err)
@@ -350,6 +373,27 @@ export async function syncSefazDocuments(targetOrgId?: string): Promise<SefazSyn
         const destCity = `${cteData.destCidade}/${cteData.destUf}`
 
         if (existingTrip.rows.length > 0) {
+          // Atualiza metadados fiscais caso a viagem tenha sido criada antes da migração
+          const sefazMetadata = {
+            weight_kg: cteData.weightKg ?? null,
+            cargo_value: cteData.cargoValue ?? null,
+            cargo_type: cteData.cargoType ?? null,
+            freight_value: cteData.vFrete ?? null,
+            rntrc: cteData.rntrc ?? null,
+            observations: cteData.observations ?? null,
+            plate: cteData.placa ?? null,
+            emitter_cnpj: cteData.emitCnpj ?? null,
+            emitter_name: cteData.emitNome ?? null,
+            issue_date: cteData.dhEmi ?? null,
+            serie: cteData.serie ?? null,
+            origin_city: `${cteData.remCidade}/${cteData.remUf}`,
+            destination_city: `${cteData.destCidade}/${cteData.destUf}`,
+          }
+          await client.query(
+            `UPDATE trips SET sefaz_metadata = $1 WHERE id = $2 AND (sefaz_metadata IS NULL OR sefaz_metadata = '{}'::jsonb)`,
+            [JSON.stringify(sefazMetadata), existingTrip.rows[0].id]
+          )
+
           detalhes.push({
             cteNumber: cteData.nCT,
             destinatario: destDesc,
@@ -386,22 +430,35 @@ export async function syncSefazDocuments(targetOrgId?: string): Promise<SefazSyn
           }
         }
 
-        // Motorista (Drivers): seleciona ou cria um motorista provisório para a viagem
+        // Motorista (Drivers): tenta vincular pela placa do veículo; se não encontrar, usa o primeiro motorista
         let driverId: string | null = null
-        const driverRes = await client.query(
-          `SELECT id FROM drivers WHERE organization_id = $1 ORDER BY created_at ASC LIMIT 1`,
-          [orgId]
-        )
-        if (driverRes.rows.length > 0) {
-          driverId = driverRes.rows[0].id
-        } else {
-          const newDriver = await client.query(
-            `INSERT INTO drivers (name, phone, pin, organization_id, company_id, default_plate)
-             VALUES ($1, $2, $3, $4, $5, $6)
-             RETURNING id`,
-            ['Motorista SEFAZ', '', '0000', orgId, companyId, cteData.placa || null]
+        if (cteData.placa) {
+          const cleanPlaca = cteData.placa.replace(/[-\s]/g, '')
+          const driverPlateRes = await client.query(
+            `SELECT id FROM drivers WHERE organization_id = $1 AND UPPER(replace(replace(default_plate, '-', ''), ' ', '')) = $2 LIMIT 1`,
+            [orgId, cleanPlaca]
           )
-          driverId = newDriver.rows[0]?.id || null
+          if (driverPlateRes.rows.length > 0) {
+            driverId = driverPlateRes.rows[0].id
+          }
+        }
+
+        if (!driverId) {
+          const driverRes = await client.query(
+            `SELECT id FROM drivers WHERE organization_id = $1 ORDER BY created_at ASC LIMIT 1`,
+            [orgId]
+          )
+          if (driverRes.rows.length > 0) {
+            driverId = driverRes.rows[0].id
+          } else {
+            const newDriver = await client.query(
+              `INSERT INTO drivers (name, phone, pin, organization_id, company_id, default_plate)
+               VALUES ($1, $2, $3, $4, $5, $6)
+               RETURNING id`,
+              ['Motorista SEFAZ', '', '0000', orgId, companyId, cteData.placa || null]
+            )
+            driverId = newDriver.rows[0]?.id || null
+          }
         }
 
         // Formata o destinatário estruturado no campo JSON 'recipients'
@@ -413,6 +470,23 @@ export async function syncSefazDocuments(targetOrgId?: string): Promise<SefazSyn
             invoices: cteData.invoices.join(', '),
           },
         ]
+
+        // Metadados fiscais enriquecidos da SEFAZ
+        const sefazMetadata = {
+          weight_kg: cteData.weightKg ?? null,
+          cargo_value: cteData.cargoValue ?? null,
+          cargo_type: cteData.cargoType ?? null,
+          freight_value: cteData.vFrete ?? null,
+          rntrc: cteData.rntrc ?? null,
+          observations: cteData.observations ?? null,
+          plate: cteData.placa ?? null,
+          emitter_cnpj: cteData.emitCnpj ?? null,
+          emitter_name: cteData.emitNome ?? null,
+          issue_date: cteData.dhEmi ?? null,
+          serie: cteData.serie ?? null,
+          origin_city: `${cteData.remCidade}/${cteData.remUf}`,
+          destination_city: `${cteData.destCidade}/${cteData.destUf}`,
+        }
 
         // Token seguro
         const tripToken = crypto.randomBytes(4).toString('hex').toUpperCase()
@@ -432,8 +506,9 @@ export async function syncSefazDocuments(targetOrgId?: string): Promise<SefazSyn
             sender,
             sender_id,
             recipients,
-            organization_id
-          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+            organization_id,
+            sefaz_metadata
+          ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
           [
             companyId,
             driverId,
@@ -448,6 +523,7 @@ export async function syncSefazDocuments(targetOrgId?: string): Promise<SefazSyn
             senderId,
             JSON.stringify(recipientsArray),
             orgId,
+            JSON.stringify(sefazMetadata),
           ]
         )
 

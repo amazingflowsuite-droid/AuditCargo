@@ -20,6 +20,11 @@ export interface ParsedCTeData {
   vFrete?: number
   invoices: string[]
   placa?: string
+  weightKg?: number
+  cargoValue?: number
+  cargoType?: string
+  rntrc?: string
+  observations?: string
 }
 
 export interface SefazSyncResult {

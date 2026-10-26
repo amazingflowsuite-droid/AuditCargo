@@ -966,6 +966,7 @@ export async function getTrips(organizationId?: string) {
       cte_number,
       cte_key,
       recipients,
+      sefaz_metadata,
       service_type,
       status,
       sender,

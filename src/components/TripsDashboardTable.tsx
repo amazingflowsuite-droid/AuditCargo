@@ -26,7 +26,9 @@ import {
   Copy,
   ExternalLink,
   Send,
+  Eye,
 } from 'lucide-react'
+import { CteDetailsModal } from './CteDetailsModal'
 import {
   updateTrip,
   cancelTrip,
@@ -109,6 +111,7 @@ export function TripsDashboardTable({
     telegramLink: string
   } | null>(null)
   const [telegramCopied, setTelegramCopied] = useState(false)
+  const [detailsModalTrip, setDetailsModalTrip] = useState<any | null>(null)
 
   const handleSendTelegramPrompt = async (trip: any) => {
     const isLinked = Boolean(trip.telegram_chat_id || trip.drivers?.telegram_chat_id)
@@ -547,10 +550,19 @@ export function TripsDashboardTable({
                   return (
                     <tr key={trip.id} className="hover:bg-[#FAFAF9] transition-colors">
                       <td className="px-4 py-4">
-                        <div className="font-mono font-bold text-[#0F172A] flex items-center gap-1.5">
+                        <div className="font-mono font-bold text-[#0F172A] flex items-center gap-1.5 flex-wrap">
                           <span className="px-2 py-0.5 bg-[#F5F5F4] rounded-[4px] border border-[#E7E5E4]">
                             {trip.token}
                           </span>
+                          {trip.cte_key ? (
+                            <span className="px-1.5 py-0.2 rounded text-[10px] font-bold font-mono tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200">
+                              SEFAZ
+                            </span>
+                          ) : (
+                            <span className="px-1.5 py-0.2 rounded text-[10px] font-bold font-mono tracking-wider bg-stone-100 text-stone-600 border border-stone-200">
+                              MANUAL
+                            </span>
+                          )}
                         </div>
                         {trip.cte_number && (
                           <div className="text-[11px] font-mono text-[#0D9488] mt-1 flex items-center gap-1">
@@ -664,6 +676,16 @@ export function TripsDashboardTable({
                       {/* COLUNA: AÇÕES (WHATSAPP, TELEGRAM, LINK, EDITAR, CANCELAR) */}
                       <td className="px-4 py-4 text-right">
                         <div className="flex items-center justify-end gap-1.5">
+                          {/* Botão Consultar Detalhes Fiscais / SEFAZ (Lupa) */}
+                          <button
+                            type="button"
+                            onClick={() => setDetailsModalTrip(trip)}
+                            className="inline-flex items-center justify-center p-2 rounded-[6px] bg-[#0D9488]/10 text-[#0D9488] hover:bg-[#0D9488] hover:text-white transition-all shadow-2xs border border-[#0D9488]/30"
+                            title="Consultar Detalhes do Transporte e Dados Fiscais SEFAZ"
+                          >
+                            <Eye className="w-4 h-4" />
+                          </button>
+
                           {/* Botão WhatsApp */}
                           {whatsappUrl && (
                             <a
@@ -965,6 +987,13 @@ export function TripsDashboardTable({
           </div>
         </div>
       )}
+
+      {/* Modal de Consulta e Detalhes Fiscais SEFAZ (Lupa) */}
+      <CteDetailsModal
+        trip={detailsModalTrip}
+        isOpen={Boolean(detailsModalTrip)}
+        onClose={() => setDetailsModalTrip(null)}
+      />
     </div>
   )
 }
