@@ -13,6 +13,7 @@ import { sendTripWhatsAppPrompt } from '@/utils/whatsapp'
 import { sendTripTelegramPrompt, getTelegramTripDeepLink } from '@/utils/telegram'
 import { formatCNPJ, EMAIL_REGEX } from '@/utils/masks'
 import { parseCTeXml } from '@/utils/sefaz/sync-service'
+import { syncCteEmailsFromMailbox } from '@/utils/email/email-xml-sync'
 import crypto from 'crypto'
 
 // ==========================================
@@ -3328,3 +3329,31 @@ export async function updateTenantAction(orgId: string, formData: FormData) {
     if (client) client.release()
   }
 }
+
+// ==========================================
+// 📬 SINCRONIZAÇÃO DE XMLs DE CT-e VIA E-MAIL (SSW / Hostinger)
+// ==========================================
+
+export async function syncCteEmailsAction() {
+  try {
+    const user = await requireAuth()
+    const orgId = user.organization_id
+
+    const res = await syncCteEmailsFromMailbox(orgId)
+    revalidatePath('/')
+    revalidatePath('/novo-transporte')
+    return res
+  } catch (err: any) {
+    console.error('Erro em syncCteEmailsAction:', err)
+    return {
+      success: false,
+      totalEmailsChecked: 0,
+      ctesProcessed: 0,
+      tripsCreated: 0,
+      tripsUpdated: 0,
+      details: [],
+      error: err?.message || 'Falha ao sincronizar e-mails do SSW.',
+    }
+  }
+}
+

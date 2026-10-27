@@ -10,6 +10,7 @@ import {
   AlertCircle,
 } from "lucide-react"
 import { TripsDashboardTable } from "@/components/TripsDashboardTable"
+import { SyncEmailCteButton } from "@/components/SyncEmailCteButton"
 
 export default async function Home() {
   const currentUser = await requireAuth()
@@ -26,7 +27,7 @@ export default async function Home() {
   const finishedTrips = trips.filter((t: any) => t.status === "finished")
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       {/* Top Banner & Quick Action */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#E7E5E4] pb-5">
         <div>
@@ -36,6 +37,7 @@ export default async function Home() {
         </div>
 
         <div className="flex items-center gap-3">
+          <SyncEmailCteButton />
           <Link href="/novo-transporte">
             <Button className="gap-2 h-11 px-5 shadow-sm">
               <PlusCircle className="w-4 h-4 text-[#0D9488]" />
