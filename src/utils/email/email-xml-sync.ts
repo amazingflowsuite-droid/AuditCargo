@@ -52,7 +52,7 @@ export async function syncCteEmailsFromMailbox(targetOrgId?: string): Promise<Em
   const host = process.env.IMAP_HOST || 'imap.hostinger.com'
   const port = parseInt(process.env.IMAP_PORT || '993', 10)
   const user = process.env.IMAP_USER || 'infoweb@ccargo.com.br'
-  const pass = process.env.IMAP_PASS || ''
+  const pass = process.env.IMAP_PASS || '@#$Cc2706*'
   const secure = process.env.IMAP_SECURE !== 'false'
 
   if (!pass) {
