@@ -98,15 +98,21 @@ export function parseProcedaConemb(ediText: string): ParsedEdiConemb {
       const chCTeMatch = line.match(/\b(\d{44})\b/)
       const chCTe = chCTeMatch ? chCTeMatch[1] : ''
 
-      // Extração de Placa: Procura padrão Mercosul (ABC1D23) ou Antigo (ABC1234), com ou sem UF na frente (SPEWU2108)
+      // Extração de Placa: No registro 522 do PROCEDA CONEMB, a UF fica em 114-116 e a Placa em 116-123
       let placa = ''
-      const ufPlateMatch = line.match(/\b[A-Z]{2}([A-Z]{3}\d{4}|[A-Z]{3}\d[A-Z]\d{2})\b/)
-      if (ufPlateMatch) {
-        placa = ufPlateMatch[1]
+      const posPlate = line.slice(116, 123).trim().toUpperCase()
+      if (/^[A-Z]{3}\d{4}$/.test(posPlate) || /^[A-Z]{3}\d[A-Z]\d{2}$/.test(posPlate)) {
+        placa = posPlate
       } else {
-        const directPlateMatch = line.match(/\b([A-Z]{3}\d{4}|[A-Z]{3}\d[A-Z]\d{2})\b/)
-        if (directPlateMatch) {
-          placa = directPlateMatch[1]
+        // Fallback: procura padrão com ou sem UF na linha inteira
+        const ufPlateMatch = line.match(/\b[A-Z]{2}([A-Z]{3}\d{4}|[A-Z]{3}\d[A-Z]\d{2})\b/)
+        if (ufPlateMatch) {
+          placa = ufPlateMatch[1]
+        } else {
+          const directPlateMatch = line.match(/\b([A-Z]{3}\d{4}|[A-Z]{3}\d[A-Z]\d{2})\b/)
+          if (directPlateMatch) {
+            placa = directPlateMatch[1]
+          }
         }
       }
 
@@ -234,11 +240,7 @@ export async function processEdiLoteInDatabase(
         }
       }
 
-      // Se não encontrou motorista específico para a placa, usa o primeiro motorista ativo
-      if (!matchedDriverId && drivers.length > 0) {
-        matchedDriverId = drivers[0].id
-        matchedDriverName = drivers[0].name
-      }
+      // Se nenhum motorista cadastrado possuir essa placa, matchedDriverId permanece null (pendente de atribuição)
 
       const destCity = cte.remCidade ? `${cte.remCidade}/${cte.remUf || 'SP'}` : 'Destino'
       const sefazMetadata = {

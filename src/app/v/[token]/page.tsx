@@ -42,7 +42,10 @@ export default async function DriverTripPage({
 
   const tripData = trip as any
   const driverName = (Array.isArray(tripData.drivers) ? tripData.drivers[0]?.name : tripData.drivers?.name) || 'Motorista'
-  const driverPlate = (Array.isArray(tripData.drivers) ? tripData.drivers[0]?.default_plate : tripData.drivers?.default_plate) || 'N/A'
+  const driverPlate =
+    tripData.sefaz_metadata?.plate ||
+    (Array.isArray(tripData.drivers) ? tripData.drivers[0]?.default_plate : tripData.drivers?.default_plate) ||
+    'N/A'
   const branchName = Array.isArray(tripData.branches) ? tripData.branches[0]?.name : tripData.branches?.name
   const companyName = Array.isArray(tripData.companies) ? tripData.companies[0]?.name : tripData.companies?.name
   const branchLabel = branchName ? `${branchName} (${companyName || ''})` : (companyName || '')

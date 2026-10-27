@@ -203,7 +203,9 @@ export function TripsDashboardTable({
         const matchesSender = trip.sender?.toLowerCase().includes(term)
         const matchesDestination = trip.destination?.toLowerCase().includes(term)
         const matchesDriver = trip.drivers?.name?.toLowerCase().includes(term)
-        const matchesPlate = trip.drivers?.default_plate?.toLowerCase().includes(term)
+        const matchesPlate =
+          trip.drivers?.default_plate?.toLowerCase().includes(term) ||
+          (trip.sefaz_metadata?.plate as string)?.toLowerCase().includes(term)
         const matchesInvoices = trip.invoices?.some((inv: string) => inv.toLowerCase().includes(term))
 
         return (
@@ -592,9 +594,15 @@ export function TripsDashboardTable({
                         )}
                       </td>
                       <td className="px-4 py-4">
-                        <div className="font-medium text-[#1C1917]">{trip.drivers?.name || "S/ Motorista"}</div>
-                        <div className="text-xs text-[#78716C] font-mono">
-                          Placa: {trip.drivers?.default_plate || "N/A"}
+                        {trip.drivers?.name ? (
+                          <div className="font-medium text-[#1C1917]">{trip.drivers.name}</div>
+                        ) : (
+                          <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-medium bg-amber-50 text-amber-800 border border-amber-200">
+                            Pendente de motorista
+                          </div>
+                        )}
+                        <div className="text-xs text-[#78716C] font-mono mt-0.5">
+                          Placa: {trip.sefaz_metadata?.plate || trip.drivers?.default_plate || "N/A"}
                         </div>
                       </td>
 

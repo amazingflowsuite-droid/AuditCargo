@@ -243,7 +243,7 @@ export function ImportEdiButton() {
                               </span>
                             </div>
                             <div className="text-[10px] text-stone-500 truncate mt-0.5">
-                              {d.driverName ? `Motorista: ${d.driverName}` : 'Motorista padrão da frota'}
+                              {d.driverName ? `Motorista: ${d.driverName}` : 'Pendente de atribuição'}
                               {d.sender ? ` &bull; ${d.sender}` : ''}
                             </div>
                           </div>
