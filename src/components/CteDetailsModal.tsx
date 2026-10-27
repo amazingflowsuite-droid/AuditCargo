@@ -21,22 +21,41 @@ import {
   Layers,
 } from 'lucide-react'
 
+import { DriverQuickAssignCell } from './DriverQuickAssignCell'
+
 interface CteDetailsModalProps {
   trip: any
   isOpen: boolean
   onClose: () => void
+  allTrips?: any[]
+  allDrivers?: any[]
+  onDriverAssigned?: (tripId: string, assignedDriver: any) => void
 }
 
-export function CteDetailsModal({ trip, isOpen, onClose }: CteDetailsModalProps) {
+export function CteDetailsModal({
+  trip,
+  isOpen,
+  onClose,
+  allTrips = [],
+  allDrivers = [],
+  onDriverAssigned,
+}: CteDetailsModalProps) {
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
+  const [modalTrip, setModalTrip] = useState<any>(trip)
 
-  if (!isOpen || !trip) return null
+  React.useEffect(() => {
+    setModalTrip(trip)
+  }, [trip])
 
-  const sefazMeta = trip.sefaz_metadata || {}
+  if (!isOpen || !modalTrip) return null
+
+  const activeTrip = modalTrip
+  const sefazMeta = activeTrip.sefaz_metadata || {}
   const isManifest = Boolean(sefazMeta.is_manifest || (sefazMeta.ctes && sefazMeta.ctes.length > 0))
   const ctesList: any[] = sefazMeta.ctes || []
-  const isSefaz = Boolean(trip.cte_key || trip.cte_number || isManifest)
+  const isSefaz = Boolean(activeTrip.cte_key || activeTrip.cte_number || isManifest)
+
 
   // Formatação de valores monetários
   const formatMoney = (val?: number | null) => {
@@ -409,27 +428,52 @@ export function CteDetailsModal({ trip, isOpen, onClose }: CteDetailsModalProps)
 
           {/* Motorista & Rastreabilidade */}
           <div className="p-4 rounded-lg border border-[#E7E5E4] bg-white space-y-3">
-            <div className="text-xs font-mono uppercase text-[#78716C] font-semibold border-b border-[#F5F5F4] pb-2 flex items-center gap-1.5">
-              <User className="w-4 h-4 text-[#0D9488]" />
-              <span>Motorista & Veículo</span>
+            <div className="text-xs font-mono uppercase text-[#78716C] font-semibold border-b border-[#F5F5F4] pb-2 flex items-center justify-between">
+              <div className="flex items-center gap-1.5">
+                <User className="w-4 h-4 text-[#0D9488]" />
+                <span>Motorista & Veículo</span>
+              </div>
+              {sefazMeta.plate && (
+                <span className="text-[11px] font-mono text-stone-500">
+                  Placa: <strong className="text-[#0F172A]">{sefazMeta.plate}</strong>
+                </span>
+              )}
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
               <div>
-                <span className="text-[#78716C]">Motorista Vinculado:</span>
-                <p className="font-bold text-[#1C1917] text-sm mt-0.5">
-                  {trip.drivers?.name || (
-                    <span className="text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 text-xs">
-                      Pendente de motorista
-                    </span>
-                  )}
-                </p>
-                {trip.drivers?.phone && (
-                  <p className="text-[#78716C] font-mono mt-0.5">Tel: {trip.drivers.phone}</p>
+                <span className="text-[#78716C] block mb-1.5">Motorista Designado:</span>
+                {allDrivers && allDrivers.length > 0 ? (
+                  <DriverQuickAssignCell
+                    trip={activeTrip}
+                    allTrips={allTrips}
+                    allDrivers={allDrivers}
+                    onDriverAssigned={(tripId, driver) => {
+                      setModalTrip((prev: any) => ({
+                        ...prev,
+                        driver_id: driver.id,
+                        drivers: driver,
+                      }))
+                      if (onDriverAssigned) onDriverAssigned(tripId, driver)
+                    }}
+                  />
+                ) : (
+                  <div>
+                    <p className="font-bold text-[#1C1917] text-sm">
+                      {activeTrip.drivers?.name || (
+                        <span className="text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 text-xs">
+                          Pendente de motorista
+                        </span>
+                      )}
+                    </p>
+                    {activeTrip.drivers?.phone && (
+                      <p className="text-[#78716C] font-mono mt-0.5">Tel: {activeTrip.drivers.phone}</p>
+                    )}
+                  </div>
                 )}
               </div>
               <div>
-                <span className="text-[#78716C]">Observações Operacionais:</span>
-                <p className="font-mono text-[#1C1917] text-xs mt-0.5">
+                <span className="text-[#78716C] block mb-1">Observações Operacionais:</span>
+                <p className="font-mono text-[#1C1917] text-xs">
                   {sefazMeta.observations || `Placa: ${sefazMeta.plate || '—'}`}
                 </p>
               </div>

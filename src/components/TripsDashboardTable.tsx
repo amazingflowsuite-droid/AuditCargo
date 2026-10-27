@@ -29,6 +29,7 @@ import {
   Eye,
 } from 'lucide-react'
 import { CteDetailsModal } from './CteDetailsModal'
+import { DriverQuickAssignCell } from './DriverQuickAssignCell'
 import {
   updateTrip,
   cancelTrip,
@@ -92,6 +93,29 @@ export function TripsDashboardTable({
 
   // Feedback de Ações (Edição, Cancelamento, Exclusão)
   const [tableFeedback, setTableFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null)
+
+  // Atualização Otimista ao Atribuir Motorista
+  const handleDriverAssigned = (tripId: string, assignedDriver: any) => {
+    setTrips((prevTrips) =>
+      prevTrips.map((t) => {
+        if (t.id === tripId) {
+          return {
+            ...t,
+            driver_id: assignedDriver.id,
+            drivers: {
+              ...t.drivers,
+              name: assignedDriver.name,
+              phone: assignedDriver.phone,
+              default_plate: assignedDriver.default_plate,
+              telegram_chat_id: assignedDriver.telegram_chat_id,
+              telegram_username: assignedDriver.telegram_username,
+            },
+          }
+        }
+        return t
+      })
+    )
+  }
 
   // Estado para Cancelamento / Exclusão
   const [actionTrip, setActionTrip] = useState<any | null>(null)
@@ -629,16 +653,13 @@ export function TripsDashboardTable({
                         )}
                       </td>
                       <td className="px-4 py-4">
-                        {trip.drivers?.name ? (
-                          <div className="font-medium text-[#1C1917]">{trip.drivers.name}</div>
-                        ) : (
-                          <div className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded text-xs font-medium bg-amber-50 text-amber-800 border border-amber-200">
-                            Pendente de motorista
-                          </div>
-                        )}
-                        <div className="text-xs text-[#78716C] font-mono mt-0.5">
-                          Placa: {trip.sefaz_metadata?.plate || trip.drivers?.default_plate || "N/A"}
-                        </div>
+                        <DriverQuickAssignCell
+                          trip={trip}
+                          allTrips={trips}
+                          allDrivers={drivers}
+                          onDriverAssigned={handleDriverAssigned}
+                          disabled={!isAdmin}
+                        />
                       </td>
 
                       {/* COLUNA: DATA/HORA DE CHEGADA E FINALIZAÇÃO */}
@@ -1036,6 +1057,9 @@ export function TripsDashboardTable({
         trip={detailsModalTrip}
         isOpen={Boolean(detailsModalTrip)}
         onClose={() => setDetailsModalTrip(null)}
+        allTrips={trips}
+        allDrivers={drivers}
+        onDriverAssigned={handleDriverAssigned}
       />
     </div>
   )
