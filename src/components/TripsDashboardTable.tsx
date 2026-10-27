@@ -207,6 +207,11 @@ export function TripsDashboardTable({
           trip.drivers?.default_plate?.toLowerCase().includes(term) ||
           (trip.sefaz_metadata?.plate as string)?.toLowerCase().includes(term)
         const matchesInvoices = trip.invoices?.some((inv: string) => inv.toLowerCase().includes(term))
+        const matchesChildCte = trip.sefaz_metadata?.ctes?.some((c: any) =>
+          c.nCT?.toLowerCase().includes(term) ||
+          c.chCTe?.toLowerCase().includes(term) ||
+          c.invoices?.some((inv: string) => inv.toLowerCase().includes(term))
+        )
 
         return (
           matchesToken ||
@@ -215,7 +220,8 @@ export function TripsDashboardTable({
           matchesDestination ||
           matchesDriver ||
           matchesPlate ||
-          matchesInvoices
+          matchesInvoices ||
+          matchesChildCte
         )
       }
 
@@ -525,7 +531,7 @@ export function TripsDashboardTable({
             <table className="w-full text-left text-sm">
               <thead className="bg-[#F5F5F4] border-b border-[#E7E5E4] text-[#57534E] text-xs font-mono uppercase">
                 <tr>
-                  <th className="px-4 py-3.5">Token / DACTE</th>
+                  <th className="px-4 py-3.5">Token / Romaneio</th>
                   <th className="px-4 py-3.5">Serviço</th>
                   <th className="px-4 py-3.5">Remetente → Destino(s)</th>
                   <th className="px-4 py-3.5">Motorista / Placa</th>
@@ -538,12 +544,19 @@ export function TripsDashboardTable({
                 {paginatedTrips.map((trip: any) => {
                   const statusBadge = getStatusBadge(trip.status)
 
+                  const totalCtes = trip.sefaz_metadata?.total_ctes || trip.sefaz_metadata?.ctes?.length || 1
+                  const isManifest = trip.sefaz_metadata?.is_manifest || totalCtes > 1
+
                   const whatsappUrl = trip.drivers?.phone
                     ? `https://wa.me/55${trip.drivers.phone.replace(/\D/g, '')}?text=${encodeURIComponent(
                         `Olá, *${trip.drivers?.name?.split(' ')[0] || 'Motorista'}*! 👋\n\n` +
-                        `Sua viagem para *${trip.destination}* está registrada no AuditCargo. 🚚\n` +
-                        (trip.cte_number ? `CT-e: ${trip.cte_number} | ` : '') + `Serviço: ${trip.service_type || 'Estadia'}\n\n` +
-                        `Para informar sua chegada e saída/descarga, acesse seu painel pelo link abaixo:\n` +
+                        (isManifest
+                          ? `Seu *Romaneio de Carga* (${trip.cte_number || `Placa ${trip.sefaz_metadata?.plate}`}) foi liberado no AuditCargo. 🚚\n` +
+                            `Carga: ${totalCtes} CT-es | ${trip.invoices?.length || 0} NFs transportadas.\n`
+                          : `Sua viagem para *${trip.destination}* está registrada no AuditCargo. 🚚\n` +
+                            (trip.cte_number ? `CT-e: ${trip.cte_number} | ` : '')) +
+                        `Destino: ${trip.destination}\n\n` +
+                        `Para informar sua chegada e descarregamento, acesse seu painel:\n` +
                         `🔗 ${origin ? `${origin}/v/${trip.token}` : `/v/${trip.token}`}\n\n` +
                         `Boa viagem e dirija com segurança! 🛣️`
                       )}`
@@ -556,7 +569,11 @@ export function TripsDashboardTable({
                           <span className="px-2 py-0.5 bg-[#F5F5F4] rounded-[4px] border border-[#E7E5E4]">
                             {trip.token}
                           </span>
-                          {trip.cte_key ? (
+                          {trip.sefaz_metadata?.is_manifest ? (
+                            <span className="px-1.5 py-0.2 rounded text-[10px] font-bold font-mono tracking-wider bg-teal-50 text-teal-700 border border-teal-200">
+                              ROMANEIO
+                            </span>
+                          ) : trip.cte_key ? (
                             <span className="px-1.5 py-0.2 rounded text-[10px] font-bold font-mono tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200">
                               SEFAZ
                             </span>
@@ -566,12 +583,20 @@ export function TripsDashboardTable({
                             </span>
                           )}
                         </div>
-                        {trip.cte_number && (
+                        {trip.sefaz_metadata?.is_manifest ? (
+                          <div className="text-[11px] font-mono text-[#0D9488] mt-1 flex items-center gap-1">
+                            <FileText className="w-3 h-3" />
+                            <span>{trip.cte_number || `Romaneio ${trip.sefaz_metadata?.plate}`}</span>
+                            <span className="text-[10px] bg-teal-50 text-teal-800 px-1 py-0.2 rounded border border-teal-200 font-semibold ml-0.5">
+                              {totalCtes} CT-es
+                            </span>
+                          </div>
+                        ) : trip.cte_number ? (
                           <div className="text-[11px] font-mono text-[#0D9488] mt-1 flex items-center gap-1">
                             <FileText className="w-3 h-3" />
                             CT-e: {trip.cte_number}
                           </div>
-                        )}
+                        ) : null}
                       </td>
                       <td className="px-4 py-4">
                         <span className="inline-flex items-center px-2 py-0.5 rounded-[4px] text-xs font-semibold bg-[#F5F5F4] text-[#0F172A] border border-[#E7E5E4]">
@@ -587,9 +612,16 @@ export function TripsDashboardTable({
                         <div className="font-semibold text-[#1C1917] mt-0.5">
                           Para: {trip.destination}
                         </div>
+                        {trip.sefaz_metadata?.total_weight_kg ? (
+                          <div className="text-[11px] text-[#0F766E] font-mono mt-0.5 font-medium">
+                            Peso: {Number(trip.sefaz_metadata.total_weight_kg).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} kg
+                          </div>
+                        ) : null}
                         {trip.invoices?.length > 0 && (
                           <div className="text-xs text-[#78716C] font-mono mt-0.5">
-                            NFs: {trip.invoices.join(", ")}
+                            {trip.invoices.length > 3
+                              ? `${trip.invoices.length} NFs (${trip.invoices.slice(0, 3).join(", ")}...)`
+                              : `NFs: ${trip.invoices.join(", ")}`}
                           </div>
                         )}
                       </td>

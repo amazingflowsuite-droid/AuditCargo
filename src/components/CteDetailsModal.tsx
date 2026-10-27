@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState } from 'react'
+import React, { useState, useMemo } from 'react'
 import {
   X,
   Copy,
@@ -17,6 +17,8 @@ import {
   FileCheck2,
   Info,
   Calendar,
+  Search,
+  Layers,
 } from 'lucide-react'
 
 interface CteDetailsModalProps {
@@ -26,12 +28,15 @@ interface CteDetailsModalProps {
 }
 
 export function CteDetailsModal({ trip, isOpen, onClose }: CteDetailsModalProps) {
-  const [copiedKey, setCopiedKey] = useState(false)
+  const [copiedKey, setCopiedKey] = useState<string | null>(null)
+  const [searchTerm, setSearchTerm] = useState('')
 
   if (!isOpen || !trip) return null
 
   const sefazMeta = trip.sefaz_metadata || {}
-  const isSefaz = Boolean(trip.cte_key || trip.cte_number)
+  const isManifest = Boolean(sefazMeta.is_manifest || (sefazMeta.ctes && sefazMeta.ctes.length > 0))
+  const ctesList: any[] = sefazMeta.ctes || []
+  const isSefaz = Boolean(trip.cte_key || trip.cte_number || isManifest)
 
   // Formatação de valores monetários
   const formatMoney = (val?: number | null) => {
@@ -51,11 +56,11 @@ export function CteDetailsModal({ trip, isOpen, onClose }: CteDetailsModalProps)
     return key.replace(/(\d{4})/g, '$1 ').trim()
   }
 
-  const handleCopyKey = () => {
-    if (!trip.cte_key) return
-    navigator.clipboard.writeText(trip.cte_key)
-    setCopiedKey(true)
-    setTimeout(() => setCopiedKey(false), 2500)
+  const handleCopyKey = (keyToCopy: string) => {
+    if (!keyToCopy) return
+    navigator.clipboard.writeText(keyToCopy)
+    setCopiedKey(keyToCopy)
+    setTimeout(() => setCopiedKey(null), 2500)
   }
 
   // Destinatários parseados
@@ -70,25 +75,45 @@ export function CteDetailsModal({ trip, isOpen, onClose }: CteDetailsModalProps)
     }
   }
 
-  const portalSefazUrl = trip.cte_key
-    ? `https://dfe-portal.svrs.rs.gov.br/cte/consulta?chave=${trip.cte_key}`
-    : 'https://dfe-portal.svrs.rs.gov.br/cte/consulta'
+  // Filtro interno de CT-es do Romaneio
+  const filteredCtes = ctesList.filter((cte) => {
+    if (!searchTerm.trim()) return true
+    const term = searchTerm.toLowerCase()
+    const matchNumber = cte.nCT?.toLowerCase().includes(term)
+    const matchKey = cte.chCTe?.toLowerCase().includes(term)
+    const matchDest = (cte.remCidade || '').toLowerCase().includes(term) || (cte.destCnpj || '').includes(term)
+    const matchInvoices = cte.invoices?.some((inv: string) => inv.toLowerCase().includes(term))
+    return matchNumber || matchKey || matchDest || matchInvoices
+  })
+
+  const portalSefazUrl = (key?: string) =>
+    key
+      ? `https://dfe-portal.svrs.rs.gov.br/cte/consulta?chave=${key}`
+      : 'https://dfe-portal.svrs.rs.gov.br/cte/consulta'
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200">
-      <div className="bg-white rounded-xl shadow-2xl border border-[#E7E5E4] w-full max-w-3xl max-h-[92vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
+      <div className="bg-white rounded-xl shadow-2xl border border-[#E7E5E4] w-full max-w-4xl max-h-[92vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-200">
         {/* Cabeçalho do Modal */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-[#E7E5E4] bg-[#FAFAF9]">
           <div className="flex items-center gap-3">
             <div className="p-2.5 rounded-lg bg-teal-50 text-[#0D9488] border border-teal-100">
-              <FileText className="w-5 h-5" />
+              {isManifest ? <Truck className="w-5 h-5" /> : <FileText className="w-5 h-5" />}
             </div>
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="font-serif-title text-lg font-bold text-[#1C1917]">
-                  {trip.cte_number ? `CT-e nº ${trip.cte_number}` : `Transporte #${trip.token}`}
+                  {isManifest
+                    ? trip.cte_number || `Romaneio ${sefazMeta.plate || 'SSW'}`
+                    : trip.cte_number
+                    ? `CT-e nº ${trip.cte_number}`
+                    : `Transporte #${trip.token}`}
                 </h3>
-                {isSefaz ? (
+                {isManifest ? (
+                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold font-mono tracking-wider bg-teal-50 text-teal-800 border border-teal-200 uppercase">
+                    <Layers className="w-3 h-3" /> Romaneio SSW
+                  </span>
+                ) : isSefaz ? (
                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-bold font-mono tracking-wider bg-emerald-50 text-emerald-700 border border-emerald-200 uppercase">
                     <FileCheck2 className="w-3 h-3" /> SEFAZ DFe
                   </span>
@@ -100,7 +125,7 @@ export function CteDetailsModal({ trip, isOpen, onClose }: CteDetailsModalProps)
               </div>
               <p className="text-xs text-[#78716C] font-mono mt-0.5">
                 Token AuditCargo: <strong className="text-[#1C1917]">{trip.token}</strong>
-                {sefazMeta.serie && ` • Série: ${sefazMeta.serie}`}
+                {isManifest && ctesList.length > 0 && ` • ${ctesList.length} CT-es embarcados`}
                 {sefazMeta.issue_date && ` • Emissão: ${new Date(sefazMeta.issue_date).toLocaleDateString('pt-BR')}`}
               </p>
             </div>
@@ -109,7 +134,7 @@ export function CteDetailsModal({ trip, isOpen, onClose }: CteDetailsModalProps)
           <button
             type="button"
             onClick={onClose}
-            className="p-2 text-[#78716C] hover:text-[#1C1917] hover:bg-[#F5F5F4] rounded-lg transition-colors"
+            className="p-2 text-[#78716C] hover:text-[#1C1917] hover:bg-[#F5F5F4] rounded-lg transition-colors cursor-pointer"
             title="Fechar detalhes"
           >
             <X className="w-5 h-5" />
@@ -126,24 +151,25 @@ export function CteDetailsModal({ trip, isOpen, onClose }: CteDetailsModalProps)
                 <Scale className="w-3.5 h-3.5 text-[#0D9488]" /> Peso Carga
               </div>
               <div className="text-base font-bold text-[#1C1917] font-mono mt-1">
-                {formatWeight(sefazMeta.weight_kg)}
+                {formatWeight(sefazMeta.total_weight_kg || sefazMeta.weight_kg)}
               </div>
             </div>
 
-            {/* Valor da Carga */}
+            {/* Total de CT-es ou Valor da Carga */}
             <div className="p-3.5 rounded-lg border border-[#E7E5E4] bg-[#FAFAF9]">
               <div className="flex items-center gap-1.5 text-xs text-[#78716C] font-mono uppercase">
-                <Boxes className="w-3.5 h-3.5 text-blue-600" /> Valor Mercadoria
+                <Boxes className="w-3.5 h-3.5 text-blue-600" />
+                {isManifest ? 'Documentos' : 'Valor Mercadoria'}
               </div>
               <div className="text-base font-bold text-[#1C1917] font-mono mt-1">
-                {formatMoney(sefazMeta.cargo_value)}
+                {isManifest ? `${ctesList.length} CT-es` : formatMoney(sefazMeta.cargo_value)}
               </div>
             </div>
 
             {/* Valor do Frete */}
             <div className="p-3.5 rounded-lg border border-[#E7E5E4] bg-[#FAFAF9]">
               <div className="flex items-center gap-1.5 text-xs text-[#78716C] font-mono uppercase">
-                <DollarSign className="w-3.5 h-3.5 text-emerald-600" /> Valor Frete
+                <DollarSign className="w-3.5 h-3.5 text-emerald-600" /> Valor Frete Total
               </div>
               <div className="text-base font-bold text-[#1C1917] font-mono mt-1">
                 {formatMoney(sefazMeta.freight_value)}
@@ -161,8 +187,124 @@ export function CteDetailsModal({ trip, isOpen, onClose }: CteDetailsModalProps)
             </div>
           </div>
 
-          {/* Chave de Acesso SEFAZ */}
-          {trip.cte_key && (
+          {/* SEÇÃO PRINCIPAL: SE FOR UM ROMANEIO COM MÚLTIPLOS CT-ES */}
+          {isManifest && ctesList.length > 0 && (
+            <div className="space-y-3">
+              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 border-b border-[#E7E5E4] pb-2">
+                <div className="flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-[#0D9488]" />
+                  <span className="font-bold text-[#1C1917] text-sm">
+                    CT-es Embarcados neste Romaneio ({ctesList.length})
+                  </span>
+                </div>
+                {/* Campo de Busca Rápida de CT-e ou NF */}
+                <div className="relative w-full sm:w-64">
+                  <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-stone-400" />
+                  <input
+                    type="text"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                    placeholder="Filtrar por CT-e, chave ou NF..."
+                    className="w-full pl-8 pr-3 py-1 text-xs rounded-md border border-[#E7E5E4] bg-[#FAFAF9] focus:bg-white focus:outline-none focus:ring-1 focus:ring-[#0D9488]"
+                  />
+                </div>
+              </div>
+
+              {/* Lista dos CT-es */}
+              <div className="space-y-2.5 max-h-72 overflow-y-auto pr-1">
+                {filteredCtes.map((c: any, idx: number) => {
+                  const isCurrentCopied = copiedKey === c.chCTe
+                  return (
+                    <div
+                      key={idx}
+                      className="p-3 rounded-lg border border-[#E7E5E4] bg-white hover:border-[#0D9488]/40 transition-colors shadow-2xs space-y-2"
+                    >
+                      <div className="flex items-center justify-between gap-2 flex-wrap">
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono font-bold text-[#0F172A] text-sm">
+                            CT-e #{c.nCT}
+                          </span>
+                          {c.serie && (
+                            <span className="text-[10px] font-mono text-stone-500 bg-stone-100 px-1.5 py-0.2 rounded">
+                              Série {c.serie}
+                            </span>
+                          )}
+                          <span className="text-[11px] font-mono text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200 font-semibold">
+                            Frete: {formatMoney(c.vFrete)}
+                          </span>
+                          {c.weightKg && (
+                            <span className="text-[11px] font-mono text-stone-600 bg-stone-50 px-1.5 py-0.2 rounded border border-stone-200">
+                              Peso: {formatWeight(c.weightKg)}
+                            </span>
+                          )}
+                        </div>
+
+                        {c.remCidade && (
+                          <div className="text-xs text-stone-600 flex items-center gap-1 font-medium">
+                            <MapPin className="w-3 h-3 text-[#0D9488]" />
+                            <span>{c.remCidade}/{c.remUf || 'SP'}</span>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* NFs Transportadas neste CT-e */}
+                      {c.invoices && c.invoices.length > 0 && (
+                        <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                          <span className="text-[11px] font-mono text-stone-400">NFs:</span>
+                          {c.invoices.map((inv: string, i: number) => (
+                            <span
+                              key={i}
+                              className="text-[10px] font-mono bg-stone-100 text-stone-700 px-1.5 py-0.2 rounded border border-stone-200"
+                            >
+                              {inv}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Chave de Acesso do CT-e com Botão de Cópia */}
+                      {c.chCTe && (
+                        <div className="flex items-center justify-between gap-2 pt-1 border-t border-stone-100 text-[11px]">
+                          <span className="font-mono text-stone-500 truncate" title={c.chCTe}>
+                            Chave: {formatCteKey(c.chCTe)}
+                          </span>
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => handleCopyKey(c.chCTe)}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-stone-50 text-stone-700 border border-stone-200 hover:bg-stone-100 transition-colors"
+                            >
+                              {isCurrentCopied ? (
+                                <>
+                                  <Check className="w-3 h-3 text-emerald-600" /> Copiado!
+                                </>
+                              ) : (
+                                <>
+                                  <Copy className="w-3 h-3" /> Copiar Chave
+                                </>
+                              )}
+                            </button>
+                            <a
+                              href={portalSefazUrl(c.chCTe)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium bg-teal-50 text-teal-800 border border-teal-200 hover:bg-teal-100 transition-colors"
+                            >
+                              <span>SEFAZ</span>
+                              <ExternalLink className="w-2.5 h-2.5" />
+                            </a>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* Chave de Acesso SEFAZ para CT-e Único */}
+          {!isManifest && trip.cte_key && (
             <div className="p-4 rounded-lg bg-teal-50/60 border border-teal-200/80">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-xs font-mono uppercase font-bold text-[#0F766E] flex items-center gap-1.5">
@@ -171,10 +313,10 @@ export function CteDetailsModal({ trip, isOpen, onClose }: CteDetailsModalProps)
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
-                    onClick={handleCopyKey}
+                    onClick={() => handleCopyKey(trip.cte_key)}
                     className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded bg-white text-[#0F766E] border border-teal-300 hover:bg-teal-50 transition-colors shadow-2xs"
                   >
-                    {copiedKey ? (
+                    {copiedKey === trip.cte_key ? (
                       <>
                         <Check className="w-3.5 h-3.5 text-emerald-600" /> Copiado!
                       </>
@@ -185,7 +327,7 @@ export function CteDetailsModal({ trip, isOpen, onClose }: CteDetailsModalProps)
                     )}
                   </button>
                   <a
-                    href={portalSefazUrl}
+                    href={portalSefazUrl(trip.cte_key)}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded bg-[#0D9488] text-white hover:bg-[#0F766E] transition-colors shadow-2xs"
@@ -196,7 +338,7 @@ export function CteDetailsModal({ trip, isOpen, onClose }: CteDetailsModalProps)
                   </a>
                 </div>
               </div>
-              <div className="p-2.5 bg-white rounded border border-teal-200/70 font-mono text-xs sm:text-sm text-[#0F172A] tracking-wider select-all break-all">
+              <div className="font-mono text-xs text-[#0F172A] tracking-wider bg-white/80 p-2.5 rounded border border-teal-200 select-all">
                 {formatCteKey(trip.cte_key)}
               </div>
             </div>
@@ -244,89 +386,31 @@ export function CteDetailsModal({ trip, isOpen, onClose }: CteDetailsModalProps)
             </div>
           </div>
 
-          {/* Múltiplos Destinatários (se houver mais de 1) */}
-          {recipientsList.length > 1 && (
-            <div className="p-4 rounded-lg border border-[#E7E5E4] bg-[#FAFAF9] space-y-3">
-              <div className="text-xs font-mono uppercase text-[#78716C] font-semibold">
-                Paradas / Entregas da Rota ({recipientsList.length})
-              </div>
-              <div className="space-y-2">
-                {recipientsList.map((rec, idx) => (
-                  <div key={idx} className="p-2.5 rounded bg-white border border-[#E7E5E4] text-xs space-y-1">
-                    <div className="font-bold text-[#1C1917] flex items-center gap-2">
-                      <span className="w-5 h-5 rounded-full bg-teal-100 text-[#0D9488] inline-flex items-center justify-center text-[10px] font-mono">
-                        {idx + 1}
-                      </span>
-                      <span>{rec.name}</span>
-                    </div>
-                    <div className="text-[#78716C] pl-7 font-mono">{rec.destination}</div>
-                    {rec.invoices && (
-                      <div className="text-teal-700 pl-7 font-mono text-[11px]">
-                        NFs: {rec.invoices}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Notas Fiscais Vinculadas */}
-          <div className="p-4 rounded-lg border border-[#E7E5E4] bg-white space-y-2.5">
-            <div className="flex items-center justify-between border-b border-[#F5F5F4] pb-2">
-              <span className="text-xs font-mono uppercase text-[#78716C] font-semibold flex items-center gap-1.5">
-                <Boxes className="w-4 h-4 text-[#0D9488]" />
-                Notas Fiscais Transportadas ({trip.invoices?.length || 0})
-              </span>
-              {sefazMeta.cargo_type && (
-                <span className="text-xs font-mono text-[#78716C]">
-                  Produto: <strong className="text-[#1C1917]">{sefazMeta.cargo_type}</strong>
-                </span>
-              )}
-            </div>
-
-            {trip.invoices && trip.invoices.length > 0 ? (
-              <div className="flex flex-wrap gap-1.5 pt-1">
-                {trip.invoices.map((inv: string, i: number) => (
-                  <span
-                    key={i}
-                    className="inline-flex items-center px-2 py-1 rounded bg-[#F5F5F4] text-[#1C1917] font-mono text-xs border border-[#E7E5E4]"
-                  >
-                    NF {inv}
-                  </span>
-                ))}
-              </div>
-            ) : (
-              <p className="text-xs text-[#A8A29E] italic">Nenhuma nota fiscal declarada individualmente.</p>
-            )}
-          </div>
-
           {/* Motorista & Rastreabilidade */}
           <div className="p-4 rounded-lg border border-[#E7E5E4] bg-white space-y-3">
             <div className="text-xs font-mono uppercase text-[#78716C] font-semibold border-b border-[#F5F5F4] pb-2 flex items-center gap-1.5">
               <User className="w-4 h-4 text-[#0D9488]" />
-              <span>Motorista & Operação</span>
+              <span>Motorista & Veículo</span>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
               <div>
-                <span className="text-[#78716C]">Motorista Designado:</span>
+                <span className="text-[#78716C]">Motorista Vinculado:</span>
                 <p className="font-bold text-[#1C1917] text-sm mt-0.5">
-                  {trip.drivers?.name || 'Motorista provisório (SEFAZ)'}
+                  {trip.drivers?.name || (
+                    <span className="text-amber-800 bg-amber-50 px-2 py-0.5 rounded border border-amber-200 text-xs">
+                      Pendente de motorista
+                    </span>
+                  )}
                 </p>
                 {trip.drivers?.phone && (
                   <p className="text-[#78716C] font-mono mt-0.5">Tel: {trip.drivers.phone}</p>
                 )}
               </div>
               <div>
-                <span className="text-[#78716C]">Registro ANTT / RNTRC:</span>
-                <p className="font-mono text-[#1C1917] text-sm mt-0.5">
-                  {sefazMeta.rntrc || '—'}
+                <span className="text-[#78716C]">Observações Operacionais:</span>
+                <p className="font-mono text-[#1C1917] text-xs mt-0.5">
+                  {sefazMeta.observations || `Placa: ${sefazMeta.plate || '—'}`}
                 </p>
-                {sefazMeta.observations && (
-                  <p className="text-[11px] text-[#78716C] truncate mt-0.5" title={sefazMeta.observations}>
-                    Obs: {sefazMeta.observations}
-                  </p>
-                )}
               </div>
             </div>
           </div>
@@ -336,12 +420,14 @@ export function CteDetailsModal({ trip, isOpen, onClose }: CteDetailsModalProps)
         <div className="flex items-center justify-between px-6 py-4 border-t border-[#E7E5E4] bg-[#FAFAF9]">
           <div className="text-xs text-[#78716C] font-mono flex items-center gap-1">
             <Info className="w-3.5 h-3.5 text-[#0D9488]" />
-            Dados obtidos por recepção do CT-e oficial SEFAZ
+            {isManifest
+              ? `Manifesto SSW consolidado (${ctesList.length} CT-es)`
+              : 'Dados obtidos por recepção do CT-e oficial SEFAZ'}
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="px-4 py-2 text-xs font-medium rounded-lg bg-white border border-[#E7E5E4] text-[#1C1917] hover:bg-[#F5F5F4] transition-colors shadow-2xs"
+            className="px-4 py-2 text-xs font-medium rounded-lg bg-white border border-[#E7E5E4] text-[#1C1917] hover:bg-[#F5F5F4] transition-colors shadow-2xs cursor-pointer"
           >
             Fechar
           </button>

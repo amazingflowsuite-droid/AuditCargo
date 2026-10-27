@@ -193,10 +193,10 @@ export function ImportEdiButton() {
                     <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5" />
                     <div>
                       <h4 className="font-bold text-sm text-emerald-900">
-                        Manifesto Importado com Sucesso!
+                        Romaneios Importados com Sucesso!
                       </h4>
                       <p className="text-xs text-emerald-800 mt-0.5">
-                        {importResult.created} transporte(s) novo(s) criado(s) e {importResult.updated} atualizado(s).
+                        {importResult.created} romaneio(s) criado(s) e {importResult.updated} atualizado(s) consolidando <strong>{importResult.totalCtes} CT-es</strong> do SSW.
                       </p>
                       {importResult.transportadora && (
                         <p className="text-[10px] font-mono text-emerald-700 mt-1">
@@ -209,12 +209,12 @@ export function ImportEdiButton() {
                   {/* Resumo em Cards */}
                   <div className="grid grid-cols-3 gap-2 text-center font-mono">
                     <div className="p-2.5 bg-stone-50 border border-stone-200 rounded-[8px]">
-                      <span className="text-[10px] text-stone-500 block uppercase">Total CT-es</span>
+                      <span className="text-[10px] text-stone-500 block uppercase font-sans">CT-es Totais</span>
                       <span className="text-base font-bold text-stone-800">{importResult.totalCtes}</span>
                     </div>
                     <div className="p-2.5 bg-emerald-50 border border-emerald-200 rounded-[8px]">
                       <span className="text-[10px] text-emerald-700 block uppercase font-sans font-semibold">
-                        Criados
+                        Romaneios Criados
                       </span>
                       <span className="text-base font-bold text-emerald-700">{importResult.created}</span>
                     </div>
@@ -226,10 +226,10 @@ export function ImportEdiButton() {
                     </div>
                   </div>
 
-                  {/* Lista de CT-es do Manifesto */}
+                  {/* Lista de Romaneios / Cargas */}
                   <div className="space-y-1.5">
                     <h5 className="text-[11px] font-mono uppercase text-stone-500 font-bold">
-                      Transportes Vinculados:
+                      Romaneios Gerados:
                     </h5>
                     <div className="divide-y divide-stone-100 border border-stone-200 rounded-[8px] max-h-52 overflow-y-auto">
                       {importResult.details.map((d, idx) => (

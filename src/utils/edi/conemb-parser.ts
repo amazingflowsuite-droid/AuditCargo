@@ -22,6 +22,27 @@ export interface ParsedEdiCte {
   destCnpj?: string
 }
 
+export interface ParsedEdiManifest {
+  manifestKey: string
+  manifestNumber: string
+  filial: string
+  plate: string
+  formattedPlate: string
+  issueDate?: string
+  remNome?: string
+  remCnpj?: string
+  remEndereco?: string
+  remCidade?: string
+  remUf?: string
+  remTelefone?: string
+  destCity?: string
+  destinations: string[]
+  totalWeightKg: number
+  totalFreightValue: number
+  invoices: string[]
+  ctes: ParsedEdiCte[]
+}
+
 export interface ParsedEdiConemb {
   isConemb: boolean
   transportadora?: string
@@ -216,21 +237,74 @@ export async function processEdiLoteInDatabase(
   )
   const drivers = driversRes.rows
 
+  // 1. Agrupamento dos CT-es por Romaneio / Veículo: Filial + Placa
+  const manifestsMap = new Map<string, ParsedEdiManifest>()
+
   for (const cte of parsedEdi.ctes) {
+    const rawPlate = cte.placa || 'SEM_PLACA'
+    const filial = cte.filial || 'GRU'
+    const key = `ROM-${filial}-${rawPlate}`
+
+    if (!manifestsMap.has(key)) {
+      manifestsMap.set(key, {
+        manifestKey: key,
+        manifestNumber: `Romaneio ${filial} • ${formatPlate(rawPlate)}`,
+        filial,
+        plate: rawPlate,
+        formattedPlate: formatPlate(rawPlate),
+        issueDate: cte.issueDate,
+        remNome: cte.remNome,
+        remCnpj: cte.remCnpj,
+        remEndereco: cte.remEndereco,
+        remCidade: cte.remCidade,
+        remUf: cte.remUf,
+        remTelefone: cte.remTelefone,
+        destCity: cte.remCidade ? `${cte.remCidade}/${cte.remUf || 'SP'}` : 'Destino',
+        destinations: [],
+        totalWeightKg: 0,
+        totalFreightValue: 0,
+        invoices: [],
+        ctes: [],
+      })
+    }
+
+    const m = manifestsMap.get(key)!
+    m.ctes.push(cte)
+    m.totalWeightKg += cte.weightKg || 0
+    m.totalFreightValue += cte.vFrete || 0
+
+    // Acumula NFs sem duplicidade
+    cte.invoices.forEach((inv) => {
+      if (!m.invoices.includes(inv)) m.invoices.push(inv)
+    })
+
+    // Acumula destinos
+    const dest = cte.remCidade ? `${cte.remCidade}/${cte.remUf || 'SP'}` : ''
+    if (dest && !m.destinations.includes(dest)) {
+      m.destinations.push(dest)
+    }
+
+    if (!m.remNome && cte.remNome) m.remNome = cte.remNome
+    if (!m.remCnpj && cte.remCnpj) m.remCnpj = cte.remCnpj
+  }
+
+  // 2. Itera sobre cada Romaneio / Manifesto gerado
+  for (const manifest of manifestsMap.values()) {
     try {
-      // 1. Verifica duplicidade por Chave ou Número do CT-e
+      // 2.1 Verifica duplicidade pelo Identificador do Romaneio
       const existingRes = await dbClient.query(
         `SELECT id, sefaz_metadata FROM trips 
-         WHERE (cte_key = $1 OR cte_number = $2) AND organization_id = $3 LIMIT 1`,
-        [cte.chCTe, cte.nCT, orgId]
+         WHERE organization_id = $1 
+           AND (sefaz_metadata->>'manifest_key' = $2 OR cte_number = $3 OR cte_number = $4) LIMIT 1`,
+        [orgId, manifest.manifestKey, manifest.manifestNumber, manifest.manifestKey]
       )
 
-      // Vinculação de Motorista pela Placa
+      // Vinculação de Motorista pela Placa do Veículo
       let matchedDriverId: string | null = null
       let matchedDriverName: string | null = null
 
-      if (cte.placa) {
-        const cleanPlaca = cte.placa.replace(/[-\s]/g, '').toUpperCase()
+      if (manifest.plate && manifest.plate !== 'SEM_PLACA') {
+        const cleanPlaca = manifest.plate.replace(/[-\s]/g, '').toUpperCase()
         const foundDriver = drivers.find(
           (d) => (d.default_plate || '').replace(/[-\s]/g, '').toUpperCase() === cleanPlaca
         )
@@ -240,50 +314,74 @@ export async function processEdiLoteInDatabase(
         }
       }
 
-      // Se nenhum motorista cadastrado possuir essa placa, matchedDriverId permanece null (pendente de atribuição)
+      const destCitySummary = manifest.destinations.length > 0
+        ? manifest.destinations.slice(0, 2).join(' / ') + (manifest.destinations.length > 2 ? ` (+${manifest.destinations.length - 2} cidades)` : '')
+        : manifest.destCity || 'Destino'
 
-      const destCity = cte.remCidade ? `${cte.remCidade}/${cte.remUf || 'SP'}` : 'Destino'
       const sefazMetadata = {
-        weight_kg: cte.weightKg ?? null,
+        is_manifest: true,
+        manifest_key: manifest.manifestKey,
+        manifest_number: manifest.manifestNumber,
+        plate: manifest.formattedPlate || manifest.plate || null,
+        total_ctes: manifest.ctes.length,
+        total_weight_kg: manifest.totalWeightKg > 0 ? manifest.totalWeightKg : null,
         cargo_value: null,
-        cargo_type: 'Carga Embarcada (Manifesto SSW)',
-        freight_value: cte.vFrete ?? null,
+        cargo_type: `Romaneio de Carga (${manifest.ctes.length} CT-es)`,
+        freight_value: manifest.totalFreightValue > 0 ? manifest.totalFreightValue : null,
         rntrc: null,
-        observations: `Importado via EDI CONEMB SSW. Placa: ${cte.formattedPlate || cte.placa}`,
-        plate: cte.formattedPlate || cte.placa || null,
+        observations: `Romaneio SSW ${manifest.formattedPlate} • ${manifest.ctes.length} CT-es • ${manifest.invoices.length} NFs`,
         emitter_cnpj: parsedEdi.cnpjTransportadora || null,
         emitter_name: parsedEdi.transportadora || null,
-        issue_date: cte.issueDate || null,
-        serie: cte.serie || null,
-        origin_city: cte.remCidade && cte.remUf ? `${cte.remCidade}/${cte.remUf}` : null,
-        destination_city: destCity,
-        source: 'edi_conemb_ssw',
+        issue_date: manifest.issueDate || null,
+        origin_city: manifest.filial ? `Filial ${manifest.filial}` : 'Guarulhos/SP',
+        destination_city: destCitySummary,
+        source: 'edi_conemb_ssw_manifest',
+        ctes: manifest.ctes.map((c) => ({
+          nCT: c.nCT,
+          serie: c.serie,
+          chCTe: c.chCTe,
+          placa: c.formattedPlate || c.placa,
+          weightKg: c.weightKg ?? null,
+          vFrete: c.vFrete ?? null,
+          invoices: c.invoices,
+          remNome: c.remNome,
+          remCidade: c.remCidade,
+          remUf: c.remUf,
+          destCnpj: c.destCnpj,
+        })),
       }
 
       if (existingRes.rows.length > 0) {
-        // Viagem existente: atualiza metadados com a placa e dados do manifesto caso não tenha
         await dbClient.query(
           `UPDATE trips 
            SET sefaz_metadata = $1,
-               driver_id = COALESCE(driver_id, $2)
-           WHERE id = $3`,
-          [JSON.stringify(sefazMetadata), matchedDriverId, existingRes.rows[0].id]
+               invoices = $2,
+               destination = $3,
+               driver_id = COALESCE(driver_id, $4)
+           WHERE id = $5`,
+          [
+            JSON.stringify(sefazMetadata),
+            manifest.invoices,
+            destCitySummary,
+            matchedDriverId,
+            existingRes.rows[0].id,
+          ]
         )
         updated++
         details.push({
-          cteNumber: cte.nCT,
-          plate: cte.formattedPlate || cte.placa,
+          cteNumber: manifest.manifestNumber,
+          plate: manifest.formattedPlate || manifest.plate,
           driverName: matchedDriverName || undefined,
-          sender: cte.remNome,
+          sender: `${manifest.ctes.length} CT-es • ${manifest.invoices.length} NFs`,
           status: 'existente',
         })
         continue
       }
 
-      // 2. Localiza ou Cria Remetente (Senders)
+      // Localiza ou Cria Remetente
       let senderId: string | null = null
-      if (cte.remCnpj) {
-        const cleanCnpj = cte.remCnpj.replace(/\D/g, '')
+      if (manifest.remCnpj) {
+        const cleanCnpj = manifest.remCnpj.replace(/\D/g, '')
         const senderRes = await dbClient.query(
           `SELECT id FROM senders 
            WHERE replace(replace(replace(cnpj, '.', ''), '/', ''), '-', '') = $1 
@@ -299,11 +397,11 @@ export async function processEdiLoteInDatabase(
              VALUES ($1, $2, $3, $4, $5, $6, $7)
              RETURNING id`,
             [
-              cte.remNome || 'Remetente EDI',
-              cte.remCnpj,
-              cte.remEndereco || null,
-              cte.remCidade || null,
-              cte.remTelefone || null,
+              manifest.remNome || 'Remetente EDI',
+              manifest.remCnpj,
+              manifest.remEndereco || null,
+              manifest.remCidade || null,
+              manifest.remTelefone || null,
               orgId,
               companyId,
             ]
@@ -312,18 +410,17 @@ export async function processEdiLoteInDatabase(
         }
       }
 
-      // 3. Destinatário estruturado
-      const recipientsArray = [
-        {
-          name: cte.destCnpj ? `Destinatário (CNPJ ${cte.destCnpj})` : 'Destinatário',
-          destination: destCity,
-          invoices: cte.invoices.join(', '),
-        },
-      ]
+      // Destinatários estruturados dos CT-es
+      const recipientsArray = manifest.ctes.map((c) => ({
+        name: c.destCnpj ? `Destinatário (CNPJ ${c.destCnpj})` : 'Destinatário',
+        destination: c.remCidade ? `${c.remCidade}/${c.remUf || 'SP'}` : 'Destino',
+        invoices: c.invoices.join(', '),
+        cteNumber: c.nCT,
+      }))
 
       const tripToken = crypto.randomBytes(4).toString('hex').toUpperCase()
 
-      // 4. Insere a nova viagem com a Placa e o Motorista vinculado
+      // Insere o Romaneio como uma Viagem única
       await dbClient.query(
         `INSERT INTO trips (
           company_id,
@@ -344,12 +441,12 @@ export async function processEdiLoteInDatabase(
           companyId,
           matchedDriverId,
           'pending',
-          destCity,
-          cte.invoices,
+          destCitySummary,
+          manifest.invoices,
           tripToken,
-          cte.nCT,
-          cte.chCTe,
-          cte.remNome || 'Remetente EDI',
+          manifest.manifestNumber,
+          manifest.manifestKey,
+          manifest.remNome || 'Remetente EDI',
           senderId,
           JSON.stringify(recipientsArray),
           orgId,
@@ -359,18 +456,18 @@ export async function processEdiLoteInDatabase(
 
       created++
       details.push({
-        cteNumber: cte.nCT,
-        plate: cte.formattedPlate || cte.placa,
+        cteNumber: manifest.manifestNumber,
+        plate: manifest.formattedPlate || manifest.plate,
         driverName: matchedDriverName || undefined,
-        sender: cte.remNome,
+        sender: `${manifest.ctes.length} CT-es • ${manifest.invoices.length} NFs`,
         status: 'criado',
       })
     } catch (err: any) {
-      console.error(`Erro ao inserir CT-e ${cte.nCT} do EDI:`, err)
+      console.error(`Erro ao inserir Romaneio ${manifest.manifestNumber}:`, err)
       details.push({
-        cteNumber: cte.nCT,
-        plate: cte.formattedPlate || cte.placa,
-        sender: cte.remNome,
+        cteNumber: manifest.manifestNumber,
+        plate: manifest.formattedPlate || manifest.plate,
+        sender: manifest.remNome,
         status: 'erro',
         error: err?.message || 'Erro de banco de dados',
       })
