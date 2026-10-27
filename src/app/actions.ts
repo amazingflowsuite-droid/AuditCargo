@@ -14,6 +14,7 @@ import { sendTripTelegramPrompt, getTelegramTripDeepLink } from '@/utils/telegra
 import { formatCNPJ, EMAIL_REGEX } from '@/utils/masks'
 import { parseCTeXml } from '@/utils/sefaz/sync-service'
 import { syncCteEmailsFromMailbox } from '@/utils/email/email-xml-sync'
+import { parseProcedaConemb, processEdiLoteInDatabase } from '@/utils/edi/conemb-parser'
 import crypto from 'crypto'
 
 // ==========================================
@@ -3356,4 +3357,59 @@ export async function syncCteEmailsAction() {
     }
   }
 }
+
+// ==========================================
+// 📋 IMPORTAÇÃO DE EDI PROCEDA CONEMB 5.0 (Manifesto / Romaneio SSW)
+// ==========================================
+
+export async function importEdiConembAction(ediContent: string) {
+  try {
+    const user = await requireAuth()
+    const orgId = user.organization_id
+    if (!orgId) return { success: false, error: 'Organização do usuário não identificada.' }
+
+    if (!ediContent || typeof ediContent !== 'string') {
+      return { success: false, error: 'Conteúdo do arquivo EDI vazio ou inválido.' }
+    }
+
+    const parsedEdi = parseProcedaConemb(ediContent)
+    if (!parsedEdi.isConemb || parsedEdi.totalCtes === 0) {
+      return {
+        success: false,
+        error: 'O arquivo informado não é um EDI PROCEDA CONEMB válido ou não contém CT-es identificados.',
+      }
+    }
+
+    const pool = getDbPool()
+    const client = await pool.connect()
+
+    try {
+      const compRes = await client.query(
+        `SELECT id FROM companies WHERE organization_id = $1 ORDER BY created_at ASC LIMIT 1`,
+        [orgId]
+      )
+      const companyId = compRes.rows[0]?.id || null
+
+      const res = await processEdiLoteInDatabase(client, parsedEdi, orgId, companyId)
+
+      revalidatePath('/')
+      revalidatePath('/novo-transporte')
+
+      return {
+        success: true,
+        transportadora: parsedEdi.transportadora,
+        totalCtes: parsedEdi.totalCtes,
+        created: res.created,
+        updated: res.updated,
+        details: res.details,
+      }
+    } finally {
+      client.release()
+    }
+  } catch (err: any) {
+    console.error('Erro em importEdiConembAction:', err)
+    return { success: false, error: err?.message || 'Falha ao processar arquivo EDI do SSW.' }
+  }
+}
+
 

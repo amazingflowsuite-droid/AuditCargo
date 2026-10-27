@@ -4,6 +4,7 @@ import crypto from 'crypto'
 import pg from 'pg'
 import { parseCTeXml } from '@/utils/sefaz/sync-service'
 import { ParsedCTeData } from '@/utils/sefaz/types'
+import { parseProcedaConemb, processEdiLoteInDatabase } from '@/utils/edi/conemb-parser'
 
 const { Pool } = pg
 
@@ -144,9 +145,37 @@ export async function syncCteEmailsFromMailbox(targetOrgId?: string): Promise<Em
             for (const att of parsed.attachments) {
               const isXmlName = att.filename?.toLowerCase().endsWith('.xml')
               const isXmlType = att.contentType?.includes('xml')
+              const isTxtName = att.filename?.toLowerCase().endsWith('.txt') || att.filename?.toLowerCase().endsWith('.edi')
               const contentStr = att.content ? att.content.toString('utf-8') : ''
               const hasXmlSignature = contentStr.includes('<cteProc') || contentStr.includes('<CTe')
+              const hasEdiSignature = contentStr.startsWith('000') && (contentStr.includes('CON50') || contentStr.includes('520'))
 
+              // 1. Processamento de EDI PROCEDA CONEMB (Manifesto / Romaneio SSW)
+              if (isTxtName || hasEdiSignature) {
+                const parsedEdi = parseProcedaConemb(contentStr)
+                if (parsedEdi.isConemb && parsedEdi.totalCtes > 0) {
+                  foundCteInEmail = true
+                  const ediRes = await processEdiLoteInDatabase(dbClient, parsedEdi, orgId, companyId)
+                  result.ctesProcessed += parsedEdi.totalCtes
+                  result.tripsCreated += ediRes.created
+                  result.tripsUpdated += ediRes.updated
+
+                  for (const d of ediRes.details) {
+                    result.details.push({
+                      subject: `${subject} &bull; EDI Placa ${d.plate}`,
+                      from: fromAddr,
+                      date: emailDate,
+                      cteNumber: d.cteNumber,
+                      sender: d.sender,
+                      status: d.status,
+                      error: d.error,
+                    })
+                  }
+                  continue
+                }
+              }
+
+              // 2. Processamento de XML do CT-e
               if (isXmlName || isXmlType || hasXmlSignature) {
                 const cteData: ParsedCTeData | null = parseCTeXml(contentStr)
                 if (cteData) {
