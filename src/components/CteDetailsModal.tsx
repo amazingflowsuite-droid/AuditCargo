@@ -145,25 +145,36 @@ export function CteDetailsModal({ trip, isOpen, onClose }: CteDetailsModalProps)
         <div className="p-6 overflow-y-auto space-y-6 text-sm">
           {/* Cartões Rápidos de Resumo Operacional */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {/* Peso */}
+            {/* Peso Real */}
             <div className="p-3.5 rounded-lg border border-[#E7E5E4] bg-[#FAFAF9]">
               <div className="flex items-center gap-1.5 text-xs text-[#78716C] font-mono uppercase">
-                <Scale className="w-3.5 h-3.5 text-[#0D9488]" /> Peso Carga
+                <Scale className="w-3.5 h-3.5 text-[#0D9488]" /> Peso Real (Balança)
               </div>
               <div className="text-base font-bold text-[#1C1917] font-mono mt-1">
                 {formatWeight(sefazMeta.total_weight_kg || sefazMeta.weight_kg)}
               </div>
             </div>
 
-            {/* Total de CT-es ou Valor da Carga */}
+            {/* Peso Cálculo / Cubagem */}
             <div className="p-3.5 rounded-lg border border-[#E7E5E4] bg-[#FAFAF9]">
               <div className="flex items-center gap-1.5 text-xs text-[#78716C] font-mono uppercase">
                 <Boxes className="w-3.5 h-3.5 text-blue-600" />
-                {isManifest ? 'Documentos' : 'Valor Mercadoria'}
+                {sefazMeta.total_calculated_weight_kg ? 'Peso Cálculo' : 'Cubagem'}
               </div>
               <div className="text-base font-bold text-[#1C1917] font-mono mt-1">
-                {isManifest ? `${ctesList.length} CT-es` : formatMoney(sefazMeta.cargo_value)}
+                {sefazMeta.total_calculated_weight_kg
+                  ? formatWeight(sefazMeta.total_calculated_weight_kg)
+                  : sefazMeta.total_cubagem_m3
+                  ? `${Number(sefazMeta.total_cubagem_m3).toFixed(3)} m³`
+                  : isManifest
+                  ? `${ctesList.length} CT-es`
+                  : formatMoney(sefazMeta.cargo_value)}
               </div>
+              {sefazMeta.total_cubagem_m3 ? (
+                <div className="text-[10px] text-stone-500 font-mono mt-0.5">
+                  Cubagem: {Number(sefazMeta.total_cubagem_m3).toFixed(3)} m³
+                </div>
+              ) : null}
             </div>
 
             {/* Valor do Frete */}
@@ -232,9 +243,19 @@ export function CteDetailsModal({ trip, isOpen, onClose }: CteDetailsModalProps)
                           <span className="text-[11px] font-mono text-emerald-700 bg-emerald-50 px-1.5 py-0.2 rounded border border-emerald-200 font-semibold">
                             Frete: {formatMoney(c.vFrete)}
                           </span>
-                          {c.weightKg && (
-                            <span className="text-[11px] font-mono text-stone-600 bg-stone-50 px-1.5 py-0.2 rounded border border-stone-200">
-                              Peso: {formatWeight(c.weightKg)}
+                          {c.weightKg !== undefined && c.weightKg !== null && (
+                            <span className="text-[11px] font-mono text-stone-600 bg-stone-50 px-1.5 py-0.2 rounded border border-stone-200" title="Peso Real (Balança)">
+                              Real: {formatWeight(c.weightKg)}
+                            </span>
+                          )}
+                          {c.pesoCalculoKg !== undefined && c.pesoCalculoKg !== null && c.pesoCalculoKg !== c.weightKg && (
+                            <span className="text-[11px] font-mono text-blue-700 bg-blue-50 px-1.5 py-0.2 rounded border border-blue-200" title="Peso Base de Cálculo (Cubado)">
+                              Cálculo: {formatWeight(c.pesoCalculoKg)}
+                            </span>
+                          )}
+                          {c.cubagemM3 !== undefined && c.cubagemM3 !== null && c.cubagemM3 > 0 && (
+                            <span className="text-[11px] font-mono text-purple-700 bg-purple-50 px-1.5 py-0.2 rounded border border-purple-200" title="Volume em metros cúbicos">
+                              {Number(c.cubagemM3).toFixed(3)} m³
                             </span>
                           )}
                         </div>

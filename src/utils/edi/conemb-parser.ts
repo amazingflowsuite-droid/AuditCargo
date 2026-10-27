@@ -9,7 +9,10 @@ export interface ParsedEdiCte {
   placa: string
   formattedPlate: string
   issueDate?: string
+  volumes?: number
   weightKg?: number
+  pesoCalculoKg?: number
+  cubagemM3?: number
   vFrete?: number
   invoices: string[]
   remNome?: string
@@ -38,6 +41,9 @@ export interface ParsedEdiManifest {
   destCity?: string
   destinations: string[]
   totalWeightKg: number
+  totalCalculatedWeightKg: number
+  totalCubagemM3: number
+  totalVolumes: number
   totalFreightValue: number
   invoices: string[]
   ctes: ParsedEdiCte[]
@@ -150,14 +156,39 @@ export function parseProcedaConemb(ediText: string): ParsedEdiConemb {
         invoices: [],
       }
     } else if (regType === '523' && currentCte) {
-      // Registro 523: Totais do Conhecimento (Volumes, Pesos e Frete)
-      // Posição 9-20: Peso bruto (com 2 ou 3 casas decimais implícitas)
-      const pesoRaw = line.slice(9, 20).trim()
-      if (pesoRaw && !isNaN(Number(pesoRaw))) {
-        currentCte.weightKg = parseFloat(pesoRaw) / 100
+      // Registro 523: Totais do Conhecimento (Volumes, Pesos, Cubagem e Frete)
+      // Posição 004-011: Volumes (N 6,2 -> 2 casas decimais -> divide por 100)
+      const volRaw = line.slice(3, 11).trim()
+      if (volRaw && !isNaN(Number(volRaw))) {
+        currentCte.volumes = Math.round(parseFloat(volRaw) / 100)
       }
 
-      // Posição 40-55: Valor do Frete (15 dígitos com 2 decimais implícitos)
+      // Posição 012-020: Peso Bruto Real (N 6,3 -> 3 casas decimais -> divide por 1000)
+      const pesoRaw = line.slice(11, 20).trim()
+      if (pesoRaw && !isNaN(Number(pesoRaw))) {
+        currentCte.weightKg = parseFloat(pesoRaw) / 1000
+      }
+
+      // Posição 031-040: Cubagem em m³ (N 6,4 -> 4 casas decimais -> divide por 10000)
+      const cubagemRaw = line.slice(30, 40).trim()
+      if (cubagemRaw && !isNaN(Number(cubagemRaw))) {
+        currentCte.cubagemM3 = parseFloat(cubagemRaw) / 10000
+      }
+
+      // Posição 021-030: Peso Cubado (N 6,4 -> 4 decimais ou cálculo cubagem x 250 kg/m³)
+      const pesoCubadoRaw = line.slice(20, 30).trim()
+      if (currentCte.cubagemM3 && currentCte.cubagemM3 > 0) {
+        // Fator padrão rodoviário de 250 kg/m³ (conforme demonstrado no DACTE da CCargo)
+        const cubadoCalc = currentCte.cubagemM3 * 250
+        currentCte.pesoCalculoKg = Math.max(currentCte.weightKg || 0, cubadoCalc)
+      } else if (pesoCubadoRaw && !isNaN(Number(pesoCubadoRaw))) {
+        const cubadoEdi = parseFloat(pesoCubadoRaw) / 10000
+        currentCte.pesoCalculoKg = Math.max(currentCte.weightKg || 0, cubadoEdi)
+      } else {
+        currentCte.pesoCalculoKg = currentCte.weightKg
+      }
+
+      // Posição 041-055: Valor Total do Frete (N 13,2 -> 2 decimais -> divide por 100)
       const freteRaw = line.slice(40, 55).trim()
       if (freteRaw && !isNaN(Number(freteRaw))) {
         currentCte.vFrete = parseFloat(freteRaw) / 100
@@ -262,6 +293,9 @@ export async function processEdiLoteInDatabase(
         destCity: cte.remCidade ? `${cte.remCidade}/${cte.remUf || 'SP'}` : 'Destino',
         destinations: [],
         totalWeightKg: 0,
+        totalCalculatedWeightKg: 0,
+        totalCubagemM3: 0,
+        totalVolumes: 0,
         totalFreightValue: 0,
         invoices: [],
         ctes: [],
@@ -271,6 +305,9 @@ export async function processEdiLoteInDatabase(
     const m = manifestsMap.get(key)!
     m.ctes.push(cte)
     m.totalWeightKg += cte.weightKg || 0
+    m.totalCalculatedWeightKg += cte.pesoCalculoKg || cte.weightKg || 0
+    m.totalCubagemM3 += cte.cubagemM3 || 0
+    m.totalVolumes += cte.volumes || 0
     m.totalFreightValue += cte.vFrete || 0
 
     // Acumula NFs sem duplicidade
@@ -325,11 +362,14 @@ export async function processEdiLoteInDatabase(
         plate: manifest.formattedPlate || manifest.plate || null,
         total_ctes: manifest.ctes.length,
         total_weight_kg: manifest.totalWeightKg > 0 ? manifest.totalWeightKg : null,
+        total_calculated_weight_kg: manifest.totalCalculatedWeightKg > 0 ? manifest.totalCalculatedWeightKg : null,
+        total_cubagem_m3: manifest.totalCubagemM3 > 0 ? manifest.totalCubagemM3 : null,
+        total_volumes: manifest.totalVolumes > 0 ? manifest.totalVolumes : null,
         cargo_value: null,
         cargo_type: `Romaneio de Carga (${manifest.ctes.length} CT-es)`,
         freight_value: manifest.totalFreightValue > 0 ? manifest.totalFreightValue : null,
         rntrc: null,
-        observations: `Romaneio SSW ${manifest.formattedPlate} • ${manifest.ctes.length} CT-es • ${manifest.invoices.length} NFs`,
+        observations: `Romaneio SSW ${manifest.formattedPlate} • ${manifest.ctes.length} CT-es • ${manifest.invoices.length} NFs • ${manifest.totalCubagemM3.toFixed(2)} m³`,
         emitter_cnpj: parsedEdi.cnpjTransportadora || null,
         emitter_name: parsedEdi.transportadora || null,
         issue_date: manifest.issueDate || null,
@@ -341,7 +381,10 @@ export async function processEdiLoteInDatabase(
           serie: c.serie,
           chCTe: c.chCTe,
           placa: c.formattedPlate || c.placa,
+          volumes: c.volumes ?? null,
           weightKg: c.weightKg ?? null,
+          pesoCalculoKg: c.pesoCalculoKg ?? null,
+          cubagemM3: c.cubagemM3 ?? null,
           vFrete: c.vFrete ?? null,
           invoices: c.invoices,
           remNome: c.remNome,

@@ -613,8 +613,11 @@ export function TripsDashboardTable({
                           Para: {trip.destination}
                         </div>
                         {trip.sefaz_metadata?.total_weight_kg ? (
-                          <div className="text-[11px] text-[#0F766E] font-mono mt-0.5 font-medium">
-                            Peso: {Number(trip.sefaz_metadata.total_weight_kg).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} kg
+                          <div className="text-[11px] text-[#0F766E] font-mono mt-0.5 font-medium flex items-center gap-1 flex-wrap">
+                            <span>Peso: {Number(trip.sefaz_metadata.total_weight_kg).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} kg</span>
+                            {trip.sefaz_metadata.total_cubagem_m3 ? (
+                              <span className="text-stone-500">• {Number(trip.sefaz_metadata.total_cubagem_m3).toFixed(2)} m³</span>
+                            ) : null}
                           </div>
                         ) : null}
                         {trip.invoices?.length > 0 && (
