@@ -29,7 +29,9 @@ import {
   Eye,
   History,
   AlertTriangle,
+  Calendar,
 } from 'lucide-react'
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { CteDetailsModal } from './CteDetailsModal'
 import { DriverQuickAssignCell } from './DriverQuickAssignCell'
 import { getTripIncidents, INCIDENT_CATEGORIES } from '@/utils/trip-audit'
@@ -39,6 +41,8 @@ import {
   deleteTrip,
   sendWhatsAppTripStatusPromptAction,
   sendTelegramTripStatusPromptAction,
+  getTripsByPeriodAction,
+  TripsPeriodFilter,
 } from '@/app/actions'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -71,6 +75,7 @@ interface TripsDashboardTableProps {
   trips: any[]
   drivers?: any[]
   userRole?: 'admin' | 'operator'
+  initialPeriod?: TripsPeriodFilter
 }
 
 type FilterTab = 'open' | 'incidents' | 'finished' | 'cancelled' | 'all'
@@ -79,22 +84,35 @@ export function TripsDashboardTable({
   trips: initialTrips,
   drivers = [],
   userRole = 'admin',
+  initialPeriod = '7d',
 }: TripsDashboardTableProps) {
   const isAdmin = userRole === 'admin'
   const [trips, setTrips] = useState(initialTrips)
+  const [periodFilter, setPeriodFilter] = useState<TripsPeriodFilter>(initialPeriod)
+  const [isLoadingPeriod, setIsLoadingPeriod] = useState(false)
   const [activeTab, setActiveTab] = useState<FilterTab>('open')
   const [searchTerm, setSearchTerm] = useState('')
   const [isPending, startTransition] = useTransition()
-  const [origin, setOrigin] = useState('')
 
   // Sincroniza estado com props do servidor após revalidações
   useEffect(() => {
     setTrips(initialTrips)
   }, [initialTrips])
 
-  useEffect(() => {
-    setOrigin(window.location.origin)
-  }, [])
+  const handlePeriodChange = async (newPeriod: TripsPeriodFilter) => {
+    if (newPeriod === periodFilter || isLoadingPeriod) return
+    setPeriodFilter(newPeriod)
+    setIsLoadingPeriod(true)
+    try {
+      const updatedTrips = await getTripsByPeriodAction(newPeriod)
+      setTrips(updatedTrips)
+      setCurrentPage(1)
+    } catch (err) {
+      console.error('Erro ao alterar filtro de período:', err)
+    } finally {
+      setIsLoadingPeriod(false)
+    }
+  }
 
   // Estado para Edição
   const [editingTrip, setEditingTrip] = useState<any | null>(null)
@@ -222,6 +240,14 @@ export function TripsDashboardTable({
     return trips.filter((t) => t.status !== 'finished' && t.status !== 'cancelled').length
   }, [trips])
 
+  const inTransitTripsCount = useMemo(() => {
+    return trips.filter((t) => t.status === 'in_transit' || t.status === 'pending').length
+  }, [trips])
+
+  const arrivedUnloadingTripsCount = useMemo(() => {
+    return trips.filter((t) => t.status === 'arrived' || t.status === 'unloading').length
+  }, [trips])
+
   const openIncidentsTripsCount = useMemo(() => {
     return trips.filter((t) => {
       const incs = getTripIncidents(t.sefaz_metadata)
@@ -236,6 +262,21 @@ export function TripsDashboardTable({
   const cancelledTripsCount = useMemo(() => {
     return trips.filter((t) => t.status === 'cancelled').length
   }, [trips])
+
+  const periodLabelShort =
+    periodFilter === '7d' ? 'Últimos 7 dias' : periodFilter === '30d' ? 'Últimos 30 dias' : 'Histórico Geral'
+  const periodSubtitleTotal =
+    periodFilter === '7d'
+      ? 'Operações nos últimos 7 dias'
+      : periodFilter === '30d'
+      ? 'Operações nos últimos 30 dias'
+      : 'Todas as operações registradas'
+  const periodSubtitleFinished =
+    periodFilter === '7d'
+      ? 'Finalizados nos últimos 7 dias'
+      : periodFilter === '30d'
+      ? 'Finalizados nos últimos 30 dias'
+      : 'Canhoto / Dossiê emitido'
 
   const filteredTrips = useMemo(() => {
     return trips.filter((trip) => {
@@ -398,7 +439,146 @@ export function TripsDashboardTable({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-6">
+      {/* KPI Cards Sincronizados com o Período Selecionado */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+        <Card className="hover:border-[#D6D3D1] transition-colors">
+          <CardHeader className="p-4 pb-2">
+            <CardDescription className="text-xs uppercase font-mono tracking-wider">
+              Total ({periodLabelShort})
+            </CardDescription>
+            <CardTitle className="text-2xl font-bold font-mono text-[#0F172A]">
+              {trips.length}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-4 pt-0 text-xs text-[#78716C]">
+            {periodSubtitleTotal}
+          </CardContent>
+        </Card>
+
+        <Card className="border-l-4 border-l-[#D97706]">
+          <CardHeader className="p-4 pb-2">
+            <CardDescription className="text-xs uppercase font-mono tracking-wider flex items-center gap-1.5 text-[#D97706]">
+              <Clock className="w-3.5 h-3.5" /> Em Trânsito
+            </CardDescription>
+            <CardTitle className="text-2xl font-bold font-mono text-[#0F172A]">
+              {inTransitTripsCount}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-4 pt-0 text-xs text-[#78716C]">
+            A caminho do destino
+          </CardContent>
+        </Card>
+
+        <Card className="border-l-4 border-l-[#0D9488]">
+          <CardHeader className="p-4 pb-2">
+            <CardDescription className="text-xs uppercase font-mono tracking-wider flex items-center gap-1.5 text-[#0D9488]">
+              <AlertCircle className="w-3.5 h-3.5" /> Na Portaria / Doca
+            </CardDescription>
+            <CardTitle className="text-2xl font-bold font-mono text-[#0F172A]">
+              {arrivedUnloadingTripsCount}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-4 pt-0 text-xs text-[#78716C]">
+            Franquia / Descarga em andamento
+          </CardContent>
+        </Card>
+
+        <Card
+          className={`border-l-4 ${
+            openIncidentsTripsCount > 0
+              ? 'border-l-amber-600 bg-amber-50/40 border-amber-300'
+              : 'border-l-stone-400'
+          }`}
+        >
+          <CardHeader className="p-4 pb-2">
+            <CardDescription className="text-xs uppercase font-mono tracking-wider flex items-center gap-1.5 text-amber-800">
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-600" /> Com Imprevisto
+            </CardDescription>
+            <CardTitle className="text-2xl font-bold font-mono text-[#0F172A]">
+              {openIncidentsTripsCount}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-4 pt-0 text-xs text-[#78716C]">
+            {openIncidentsTripsCount > 0
+              ? 'Aguardando tratativa da central'
+              : 'Nenhuma ocorrência aberta'}
+          </CardContent>
+        </Card>
+
+        <Card className="border-l-4 border-l-[#059669]">
+          <CardHeader className="p-4 pb-2">
+            <CardDescription className="text-xs uppercase font-mono tracking-wider flex items-center gap-1.5 text-[#059669]">
+              <CheckCircle2 className="w-3.5 h-3.5" /> Concluídos ({periodFilter === '7d' ? '7 dias' : periodFilter === '30d' ? '30 dias' : 'Geral'})
+            </CardDescription>
+            <CardTitle className="text-2xl font-bold font-mono text-[#0F172A]">
+              {finishedTripsCount}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-4 pt-0 text-xs text-[#78716C]">
+            {periodSubtitleFinished}
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Seção: Transportes & Cargas Recentes + Seletor de Período */}
+      <div className="space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-semibold tracking-wider text-[#78716C] uppercase font-mono">
+              Transportes & Cargas Recentes
+            </h2>
+            {isLoadingPeriod && (
+              <Loader2 className="w-3.5 h-3.5 text-[#0D9488] animate-spin" />
+            )}
+          </div>
+
+          {/* Seletor de Janela de Consulta (Performance & UX: 7 dias padrão | 30 dias | Todos) */}
+          <div className="inline-flex items-center gap-1 p-1 bg-[#F5F5F4] rounded-[8px] border border-[#E7E5E4] text-xs font-mono">
+            <span className="px-2 py-1 text-[11px] text-[#78716C] flex items-center gap-1">
+              <Calendar className="w-3 h-3 text-[#0D9488]" />
+              Período:
+            </span>
+            <button
+              type="button"
+              onClick={() => handlePeriodChange('7d')}
+              disabled={isLoadingPeriod}
+              className={`px-2.5 py-1 rounded-[6px] transition-all cursor-pointer ${
+                periodFilter === '7d'
+                  ? 'bg-white text-[#0D9488] font-bold shadow-2xs border border-[#E7E5E4]'
+                  : 'text-[#57534E] hover:text-[#1C1917]'
+              }`}
+            >
+              Últimos 7 dias
+            </button>
+            <button
+              type="button"
+              onClick={() => handlePeriodChange('30d')}
+              disabled={isLoadingPeriod}
+              className={`px-2.5 py-1 rounded-[6px] transition-all cursor-pointer ${
+                periodFilter === '30d'
+                  ? 'bg-white text-[#0D9488] font-bold shadow-2xs border border-[#E7E5E4]'
+                  : 'text-[#57534E] hover:text-[#1C1917]'
+              }`}
+            >
+              30 dias
+            </button>
+            <button
+              type="button"
+              onClick={() => handlePeriodChange('all')}
+              disabled={isLoadingPeriod}
+              className={`px-2.5 py-1 rounded-[6px] transition-all cursor-pointer ${
+                periodFilter === 'all'
+                  ? 'bg-white text-[#0F172A] font-bold shadow-2xs border border-[#E7E5E4]'
+                  : 'text-[#57534E] hover:text-[#1C1917]'
+              }`}
+              title="Habilitar consulta de todo o histórico de transportes"
+            >
+              Consultar Todos
+            </button>
+          </div>
+        </div>
+
       {/* Controles de Filtro e Busca */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-2">
         {/* Abas de Filtro: Em Aberto (Default), Concluídos, Cancelados, Todos */}
@@ -609,7 +789,6 @@ export function TripsDashboardTable({
               <thead className="bg-[#F5F5F4] border-b border-[#E7E5E4] text-[#57534E] text-xs font-mono uppercase">
                 <tr>
                   <th className="px-4 py-3.5">Token / Romaneio</th>
-                  <th className="px-4 py-3.5">Serviço</th>
                   <th className="px-4 py-3.5">Remetente → Destino(s)</th>
                   <th className="px-4 py-3.5">Motorista / Placa</th>
                   <th className="px-4 py-3.5">Chegada & Finalização</th>
@@ -622,22 +801,6 @@ export function TripsDashboardTable({
                   const statusBadge = getStatusBadge(trip.status)
 
                   const totalCtes = trip.sefaz_metadata?.total_ctes || trip.sefaz_metadata?.ctes?.length || 1
-                  const isManifest = trip.sefaz_metadata?.is_manifest || totalCtes > 1
-
-                  const whatsappUrl = trip.drivers?.phone
-                    ? `https://wa.me/55${trip.drivers.phone.replace(/\D/g, '')}?text=${encodeURIComponent(
-                        `Olá, *${trip.drivers?.name?.split(' ')[0] || 'Motorista'}*! 👋\n\n` +
-                        (isManifest
-                          ? `Seu *Romaneio de Carga* (${trip.cte_number || `Placa ${trip.sefaz_metadata?.plate}`}) foi liberado no AuditCargo. 🚚\n` +
-                            `Carga: ${totalCtes} CT-es | ${trip.invoices?.length || 0} NFs transportadas.\n`
-                          : `Sua viagem para *${trip.destination}* está registrada no AuditCargo. 🚚\n` +
-                            (trip.cte_number ? `CT-e: ${trip.cte_number} | ` : '')) +
-                        `Destino: ${trip.destination}\n\n` +
-                        `Para informar sua chegada e descarregamento, acesse seu painel:\n` +
-                        `🔗 ${origin ? `${origin}/v/${trip.token}` : `/v/${trip.token}`}\n\n` +
-                        `Boa viagem e dirija com segurança! 🛣️`
-                      )}`
-                    : null
 
                   return (
                     <tr key={trip.id} className="hover:bg-[#FAFAF9] transition-colors">
@@ -671,11 +834,6 @@ export function TripsDashboardTable({
                             CT-e: {trip.cte_number}
                           </div>
                         ) : null}
-                      </td>
-                      <td className="px-4 py-4">
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-[4px] text-xs font-semibold bg-[#F5F5F4] text-[#0F172A] border border-[#E7E5E4]">
-                          {trip.service_type || "Estadia"}
-                        </span>
                       </td>
                       <td className="px-4 py-4">
                         {trip.sender && (
@@ -866,52 +1024,34 @@ export function TripsDashboardTable({
                             <History className="w-4 h-4" />
                           </button>
 
-                          {/* Botão WhatsApp */}
-                          {whatsappUrl && (
-                            <a
-                              href={whatsappUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              suppressHydrationWarning
-                              className="inline-flex items-center justify-center p-2 rounded-[6px] bg-[#25D366]/10 text-[#25D366] hover:bg-[#25D366] hover:text-white transition-all shadow-2xs border border-[#25D366]/30"
-                              title="Enviar no WhatsApp"
-                            >
-                              <WhatsAppIcon className="w-4 h-4" />
-                            </a>
-                          )}
-
-                          {/* Botão Disparar Bot Oficial Meta */}
+                          {/* Botão Disparar Cobrança pelo Whatsapp */}
                           {trip.drivers?.phone && (
                             <button
                               type="button"
                               disabled={sendingBotTripId === trip.id}
                               onClick={() => handleSendBotPrompt(trip.id)}
-                              className="inline-flex items-center justify-center p-2 rounded-[6px] bg-[#0F172A]/5 text-[#0F172A] hover:bg-[#0F172A] hover:text-white transition-all shadow-2xs border border-[#E2E8F0] disabled:opacity-50"
-                              title="Disparar Cobrança de Status Automática via Bot Meta (WhatsApp)"
+                              className="inline-flex items-center justify-center p-2 rounded-[6px] bg-[#25D366]/10 text-[#25D366] hover:bg-[#25D366] hover:text-white transition-all shadow-2xs border border-[#25D366]/30 disabled:opacity-50 cursor-pointer"
+                              title="Disparar Cobrança pelo Whatsapp"
                             >
                               {sendingBotTripId === trip.id ? (
-                                <Loader2 className="w-4 h-4 animate-spin text-[#0D9488]" />
+                                <Loader2 className="w-4 h-4 animate-spin text-[#25D366]" />
                               ) : (
-                                <Bot className="w-4 h-4" />
+                                <WhatsAppIcon className="w-4 h-4" />
                               )}
                             </button>
                           )}
 
-                          {/* Botão Telegram Bot (Canal Alternativo e Contingência) */}
+                          {/* Botão Disparar Cobrança pelo Telegram */}
                           <button
                             type="button"
                             disabled={sendingTelegramTripId === trip.id}
                             onClick={() => handleSendTelegramPrompt(trip)}
-                            className={`inline-flex items-center justify-center p-2 rounded-[6px] transition-all shadow-2xs border ${
+                            className={`inline-flex items-center justify-center p-2 rounded-[6px] transition-all shadow-2xs border cursor-pointer ${
                               (trip.telegram_chat_id || trip.drivers?.telegram_chat_id)
                                 ? 'bg-[#229ED9]/15 text-[#229ED9] border-[#229ED9]/40 hover:bg-[#229ED9] hover:text-white'
                                 : 'bg-[#F0F9FF] text-[#0284C7] border-[#BAE6FD] hover:bg-[#0284C7] hover:text-white'
                             } disabled:opacity-50`}
-                            title={
-                              (trip.telegram_chat_id || trip.drivers?.telegram_chat_id)
-                                ? 'Telegram Conectado: Disparar cobrança de status via Telegram Bot'
-                                : 'Vincular / Disparar via Telegram Bot'
-                            }
+                            title="Disparar Cobrança pelo Telegram"
                           >
                             {sendingTelegramTripId === trip.id ? (
                               <Loader2 className="w-4 h-4 animate-spin text-[#229ED9]" />
@@ -1179,6 +1319,7 @@ export function TripsDashboardTable({
         onTripMetadataUpdated={handleTripMetadataUpdated}
         initialTab={detailsModalTab}
       />
+      </div>
     </div>
   )
 }

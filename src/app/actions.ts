@@ -13,7 +13,7 @@ import { sendTripWhatsAppPrompt } from '@/utils/whatsapp'
 import { sendTripTelegramPrompt, getTelegramTripDeepLink } from '@/utils/telegram'
 import { formatCNPJ, EMAIL_REGEX } from '@/utils/masks'
 import { parseCTeXml } from '@/utils/sefaz/sync-service'
-import { syncCteEmailsFromMailbox } from '@/utils/email/email-xml-sync'
+import { syncCteEmailsFromMailbox, getSswSyncHealth, classifyImapError, EmailSyncResult } from '@/utils/email/email-xml-sync'
 import { parseProcedaConemb, processEdiLoteInDatabase } from '@/utils/edi/conemb-parser'
 import {
   appendTripAuditEvent,
@@ -956,7 +956,9 @@ export async function deleteDriver(id: string) {
 // 📦 VIAGENS / TRANSPORTES
 // ==========================================
 
-export async function getTrips(organizationId?: string) {
+export type TripsPeriodFilter = '7d' | '30d' | 'all'
+
+export async function getTrips(organizationId?: string, period: TripsPeriodFilter = '7d') {
   let targetOrgId = organizationId
   if (!targetOrgId) {
     const user = await requireAuth().catch(() => null)
@@ -969,7 +971,7 @@ export async function getTrips(organizationId?: string) {
   }
 
   const supabase = await createClient()
-  const { data, error } = await supabase
+  let query = supabase
     .from('trips')
     .select(`
       id,
@@ -1000,14 +1002,38 @@ export async function getTrips(organizationId?: string) {
       drivers(name, phone, default_plate, telegram_chat_id, telegram_username)
     `)
     .eq('organization_id', targetOrgId)
+
+  if (period === '7d' || period === '30d') {
+    const days = period === '7d' ? 7 : 30
+    let referenceNowMs = Date.now()
+    try {
+      const dbRes = await getDbPool().query('SELECT NOW() AS db_now')
+      if (dbRes.rows[0]?.db_now) {
+        referenceNowMs = new Date(dbRes.rows[0].db_now).getTime()
+      }
+    } catch {
+      // Fallback para Date.now() local
+    }
+    const cutoffIso = new Date(referenceNowMs - days * 24 * 60 * 60 * 1000).toISOString()
+    query = query.or(
+      `created_at.gte.${cutoffIso},completion_time.gte.${cutoffIso},status.in.(pending,in_transit,arrived,unloading)`
+    )
+  }
+
+  const { data, error } = await query
     .order('created_at', { ascending: false })
-    .limit(200)
+    .limit(period === 'all' ? 500 : 200)
 
   if (error) {
     console.error('Erro ao buscar transportes:', error.message)
     return []
   }
   return data || []
+}
+
+export async function getTripsByPeriodAction(period: TripsPeriodFilter) {
+  const user = await requireAuth()
+  return getTrips(user.organization_id, period)
 }
 
 
@@ -3501,7 +3527,16 @@ export async function updateTenantAction(orgId: string, formData: FormData) {
 // 📬 SINCRONIZAÇÃO DE XMLs DE CT-e VIA E-MAIL (SSW / Hostinger)
 // ==========================================
 
-export async function syncCteEmailsAction() {
+export async function getSswSyncStatusAction(organizationId?: string) {
+  let targetOrgId = organizationId
+  if (!targetOrgId) {
+    const user = await requireAuth().catch(() => null)
+    targetOrgId = user?.organization_id
+  }
+  return getSswSyncHealth(targetOrgId)
+}
+
+export async function syncCteEmailsAction(): Promise<EmailSyncResult> {
   try {
     const user = await requireAuth()
     const orgId = user.organization_id
@@ -3512,6 +3547,7 @@ export async function syncCteEmailsAction() {
     return res
   } catch (err: any) {
     console.error('Erro em syncCteEmailsAction:', err)
+    const diag = classifyImapError(err)
     return {
       success: false,
       totalEmailsChecked: 0,
@@ -3520,6 +3556,7 @@ export async function syncCteEmailsAction() {
       tripsUpdated: 0,
       details: [],
       error: err?.message || 'Falha ao sincronizar e-mails do SSW.',
+      diagnostic: diag,
     }
   }
 }

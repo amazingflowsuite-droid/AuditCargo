@@ -20,6 +20,25 @@ export interface EmailSyncDetail {
   error?: string
 }
 
+export interface SswSyncDiagnostic {
+  code: 'AUTH_FAILED' | 'QUOTA_EXCEEDED' | 'QUOTA_WARNING' | 'CONNECTION_TIMEOUT' | 'CONFIG_MISSING' | 'PARSE_ERROR' | 'UNKNOWN_ERROR'
+  title: string
+  cause: string
+  resolution: string
+}
+
+export interface SswSyncHealth {
+  lastSyncAt: string | null
+  status: 'healthy' | 'warning' | 'error' | 'unknown'
+  emailAccount: string
+  totalEmailsChecked?: number
+  tripsCreated?: number
+  tripsUpdated?: number
+  quotaUsagePercent?: number | null
+  error?: string
+  diagnostic?: SswSyncDiagnostic | null
+}
+
 export interface EmailSyncResult {
   success: boolean
   totalEmailsChecked: number
@@ -28,6 +47,186 @@ export interface EmailSyncResult {
   tripsUpdated: number
   details: EmailSyncDetail[]
   error?: string
+  diagnostic?: SswSyncDiagnostic | null
+  health?: SswSyncHealth
+}
+
+/**
+ * Traduz erros técnicos de IMAP / Hostinger em diagnósticos acionáveis para o usuário final,
+ * mitigando a necessidade de acionar suporte técnico.
+ */
+export function classifyImapError(err: any): SswSyncDiagnostic {
+  const rawMsg = String(err?.message || err?.responseText || err || '').toLowerCase()
+  const code = String(err?.code || err?.serverResponseCode || '').toUpperCase()
+
+  if (rawMsg.includes('imap_pass ausente') || rawMsg.includes('não configurada')) {
+    return {
+      code: 'CONFIG_MISSING',
+      title: 'Credencial de E-mail Não Configurada',
+      cause: 'A senha de integração do e-mail SSW (IMAP_PASS) não está configurada no ambiente.',
+      resolution: 'Verifique as variáveis de ambiente do servidor ou utilize a importação manual de arquivo EDI em "Novo Transporte".',
+    }
+  }
+
+  if (
+    code.includes('AUTHENTICATIONFAILED') ||
+    code.includes('AUTH') ||
+    rawMsg.includes('authentication') ||
+    rawMsg.includes('invalid credentials') ||
+    rawMsg.includes('login failed') ||
+    rawMsg.includes('username or password') ||
+    rawMsg.includes('command failed')
+  ) {
+    return {
+      code: 'AUTH_FAILED',
+      title: 'Senha do E-mail Alterada ou Inválida',
+      cause: 'O servidor recusou o login da conta infoweb@ccargo.com.br. Alguém pode ter alterado a senha do e-mail ou desativado o acesso IMAP.',
+      resolution: 'Confirme se a senha do e-mail infoweb@ccargo.com.br foi mudada no painel da Hostinger. Restaure a senha anterior ou atualize a configuração do sistema. Enquanto isso, importe o arquivo EDI manualmente em "Novo Transporte".',
+    }
+  }
+
+  if (
+    code.includes('OVERQUOTA') ||
+    code.includes('QUOTA') ||
+    rawMsg.includes('quota') ||
+    rawMsg.includes('mailbox is full') ||
+    rawMsg.includes('storage') ||
+    rawMsg.includes('disk full')
+  ) {
+    return {
+      code: 'QUOTA_EXCEEDED',
+      title: 'Capacidade da Caixa de E-mail Esgotada',
+      cause: 'A caixa de e-mail infoweb@ccargo.com.br atingiu 100% do limite de espaço na Hostinger e não consegue receber novos arquivos do SSW.',
+      resolution: 'Acesse o Webmail da Hostinger (infoweb@ccargo.com.br), limpe a Lixeira e apague e-mails antigos já lidos para liberar espaço imediatamente.',
+    }
+  }
+
+  if (
+    code.includes('ETIMEDOUT') ||
+    code.includes('ECONNREFUSED') ||
+    code.includes('ENOTFOUND') ||
+    code.includes('ECONNRESET') ||
+    rawMsg.includes('timeout') ||
+    rawMsg.includes('socket') ||
+    rawMsg.includes('connect') ||
+    rawMsg.includes('network')
+  ) {
+    return {
+      code: 'CONNECTION_TIMEOUT',
+      title: 'Instabilidade na Conexão com Servidor de E-mail',
+      cause: 'O servidor IMAP (imap.hostinger.com) demorou para responder ou está temporariamente indisponível.',
+      resolution: 'Aguarde cerca de 2 minutos e clique em "Sincronizar SSW" novamente. Se precisar liberar um caminhão agora, importe o EDI manualmente em "Novo Transporte".',
+    }
+  }
+
+  return {
+    code: 'UNKNOWN_ERROR',
+    title: 'Falha na Leitura da Caixa de E-mail SSW',
+    cause: err?.message || 'Ocorreu um erro inesperado ao comunicar com o servidor de e-mail.',
+    resolution: 'Tente sincronizar novamente em instantes. Caso o problema persista, verifique se o Webmail infoweb@ccargo.com.br está acessível ou faça a importação manual do EDI em "Novo Transporte".',
+  }
+}
+
+async function persistSswSyncHealth(
+  dbClient: pg.PoolClient,
+  orgId: string,
+  health: SswSyncHealth
+): Promise<void> {
+  try {
+    await dbClient.query(`
+      ALTER TABLE organizations 
+      ADD COLUMN IF NOT EXISTS ssw_sync_status JSONB DEFAULT '{}'::jsonb
+    `)
+    await dbClient.query(
+      `UPDATE organizations SET ssw_sync_status = $1 WHERE id = $2`,
+      [JSON.stringify(health), orgId]
+    )
+  } catch (e) {
+    console.warn('Aviso ao persistir ssw_sync_status:', e)
+  }
+}
+
+/**
+ * Consulta o status atual de saúde da sincronização SSW (E-mail) para exibição no Painel de Controle.
+ */
+export async function getSswSyncHealth(targetOrgId?: string): Promise<SswSyncHealth> {
+  const emailAccount = process.env.IMAP_USER || 'infoweb@ccargo.com.br'
+  const fallbackHealth: SswSyncHealth = {
+    lastSyncAt: null,
+    status: 'unknown',
+    emailAccount,
+    diagnostic: null,
+  }
+
+  const db = getDbPool()
+  let dbClient: pg.PoolClient | null = null
+
+  try {
+    dbClient = await db.connect()
+
+    let orgId = targetOrgId
+    if (!orgId) {
+      const orgRes = await dbClient.query(
+        `SELECT id FROM organizations WHERE active = true ORDER BY created_at DESC LIMIT 1`
+      )
+      orgId = orgRes.rows[0]?.id
+    }
+    if (!orgId) return fallbackHealth
+
+    // Verifica se a coluna ssw_sync_status existe e possui dados
+    const colCheck = await dbClient.query(
+      `SELECT column_name FROM information_schema.columns 
+       WHERE table_name = 'organizations' AND column_name = 'ssw_sync_status'`
+    )
+
+    if (colCheck.rows.length > 0) {
+      const orgStatusRes = await dbClient.query(
+        `SELECT ssw_sync_status FROM organizations WHERE id = $1 LIMIT 1`,
+        [orgId]
+      )
+      const saved = orgStatusRes.rows[0]?.ssw_sync_status
+      if (saved && typeof saved === 'object' && saved.lastSyncAt) {
+        return {
+          lastSyncAt: saved.lastSyncAt,
+          status: saved.status || 'healthy',
+          emailAccount: saved.emailAccount || emailAccount,
+          totalEmailsChecked: saved.totalEmailsChecked ?? 0,
+          tripsCreated: saved.tripsCreated ?? 0,
+          tripsUpdated: saved.tripsUpdated ?? 0,
+          quotaUsagePercent: saved.quotaUsagePercent ?? null,
+          error: saved.error,
+          diagnostic: saved.diagnostic || null,
+        }
+      }
+    }
+
+    // Fallback inteligente: busca a última viagem criada/atualizada via SSW no banco
+    const lastTripRes = await dbClient.query(
+      `SELECT created_at 
+       FROM trips 
+       WHERE organization_id = $1 
+         AND (sefaz_metadata->>'source' IN ('edi_conemb_ssw_manifest', 'email_ssw'))
+       ORDER BY created_at DESC 
+       LIMIT 1`,
+      [orgId]
+    )
+
+    if (lastTripRes.rows[0]?.created_at) {
+      return {
+        lastSyncAt: new Date(lastTripRes.rows[0].created_at).toISOString(),
+        status: 'healthy',
+        emailAccount,
+        diagnostic: null,
+      }
+    }
+
+    return fallbackHealth
+  } catch (err) {
+    console.warn('Erro ao consultar getSswSyncHealth:', err)
+    return fallbackHealth
+  } finally {
+    if (dbClient) dbClient.release()
+  }
 }
 
 /**
@@ -43,6 +242,7 @@ export async function syncCteEmailsFromMailbox(targetOrgId?: string): Promise<Em
   const secure = process.env.IMAP_SECURE !== 'false'
 
   if (!pass) {
+    const diag = classifyImapError(new Error('IMAP_PASS ausente'))
     return {
       success: false,
       totalEmailsChecked: 0,
@@ -51,6 +251,14 @@ export async function syncCteEmailsFromMailbox(targetOrgId?: string): Promise<Em
       tripsUpdated: 0,
       details: [],
       error: 'Senha do IMAP não configurada no servidor (IMAP_PASS ausente).',
+      diagnostic: diag,
+      health: {
+        lastSyncAt: new Date().toISOString(),
+        status: 'error',
+        emailAccount: user,
+        error: 'Senha do IMAP não configurada no servidor (IMAP_PASS ausente).',
+        diagnostic: diag,
+      },
     }
   }
 
@@ -65,6 +273,8 @@ export async function syncCteEmailsFromMailbox(targetOrgId?: string): Promise<Em
     tripsUpdated: 0,
     details: [],
   }
+
+  let resolvedOrgId: string | undefined = targetOrgId
 
   const client = new ImapFlow({
     host,
@@ -96,6 +306,7 @@ export async function syncCteEmailsFromMailbox(targetOrgId?: string): Promise<Em
     if (!orgId) {
       throw new Error('Nenhuma organização encontrada no banco de dados para vincular os transportes.')
     }
+    resolvedOrgId = orgId
 
     // 2. Busca empresa padrão para vinculação
     const compRes = await dbClient.query(
@@ -106,6 +317,35 @@ export async function syncCteEmailsFromMailbox(targetOrgId?: string): Promise<Em
 
     // 3. Conecta no IMAP
     await client.connect()
+
+    // 3.1 Verifica capacidade / cota da caixa de e-mail preventivamente (quando suportado pelo servidor IMAP)
+    let quotaUsagePercent: number | null = null
+    let quotaDiagnostic: SswSyncDiagnostic | null = null
+    try {
+      const quotaInfo: any = await client.getQuota('INBOX')
+      const storage = quotaInfo?.storage
+      if (storage && typeof storage.usage === 'number' && typeof storage.limit === 'number' && storage.limit > 0) {
+        quotaUsagePercent = Math.round((storage.usage / storage.limit) * 100)
+        if (quotaUsagePercent >= 98) {
+          quotaDiagnostic = {
+            code: 'QUOTA_EXCEEDED',
+            title: `Caixa de E-mail no Limite (${quotaUsagePercent}% ocupada)`,
+            cause: `A conta ${user} atingiu ${quotaUsagePercent}% da capacidade máxima de armazenamento na Hostinger.`,
+            resolution: `Acesse o Webmail (${user}) e exclua e-mails antigos ou esvazie a Lixeira para não bloquear o recebimento de novos EDIs do SSW.`,
+          }
+        } else if (quotaUsagePercent >= 85) {
+          quotaDiagnostic = {
+            code: 'QUOTA_WARNING',
+            title: `Atenção: Caixa de E-mail com ${quotaUsagePercent}% de ocupação`,
+            cause: `O armazenamento da conta ${user} está próximo do limite na Hostinger.`,
+            resolution: `Recomendamos limpar e-mails antigos no Webmail (${user}) preventivamente.`,
+          }
+        }
+      }
+    } catch {
+      // Servidor IMAP sem extensão QUOTA habilitada — segue normalmente
+    }
+
     const lock = await client.getMailboxLock('INBOX')
 
     try {
@@ -119,49 +359,107 @@ export async function syncCteEmailsFromMailbox(targetOrgId?: string): Promise<Em
 
       result.totalEmailsChecked = messagesToProcess.length
 
-      if (messagesToProcess.length === 0) {
-        return result
-      }
+      if (messagesToProcess.length > 0) {
+        // Processa cada e-mail não lido usando UID explícito ({ uid: true })
+        for (const uid of messagesToProcess) {
+          try {
+            const download = await client.download(String(uid), undefined, { uid: true })
+            if (!download || !download.content) continue
 
-      // Processa cada e-mail não lido usando UID explícito ({ uid: true })
-      for (const uid of messagesToProcess) {
-        try {
-          const download = await client.download(String(uid), undefined, { uid: true })
-          if (!download || !download.content) continue
+            // Parser MIME completo do e-mail
+            const parsed = await simpleParser(download.content)
+            const subject = parsed.subject || 'Sem Assunto'
+            const fromAddr = parsed.from?.text || 'Remetente Desconhecido'
+            const emailDate = parsed.date ? parsed.date.toISOString() : undefined
 
-          // Parser MIME completo do e-mail
-          const parsed = await simpleParser(download.content)
-          const subject = parsed.subject || 'Sem Assunto'
-          const fromAddr = parsed.from?.text || 'Remetente Desconhecido'
-          const emailDate = parsed.date ? parsed.date.toISOString() : undefined
+            let foundCteInEmail = false
+            let hasDatabaseError = false
 
-          let foundCteInEmail = false
-          let hasDatabaseError = false
+            // Varre os anexos em busca de EDIs ou XMLs
+            if (parsed.attachments && parsed.attachments.length > 0) {
+              for (const att of parsed.attachments) {
+                const filenameLower = (att.filename || '').toLowerCase()
+                const isXmlName = filenameLower.endsWith('.xml')
+                const isXmlType = att.contentType?.includes('xml')
+                const isTxtName = filenameLower.endsWith('.txt') || filenameLower.endsWith('.edi')
+                const contentStr = att.content ? att.content.toString('utf-8') : ''
+                const trimmedContent = contentStr.trimStart()
+                const hasXmlSignature = contentStr.includes('<cteProc') || contentStr.includes('<CTe')
+                const hasEdiSignature =
+                  trimmedContent.startsWith('000') &&
+                  (trimmedContent.includes('CON50') || trimmedContent.includes('520') || trimmedContent.includes('522'))
 
-          // Varre os anexos em busca de EDIs ou XMLs
-          if (parsed.attachments && parsed.attachments.length > 0) {
-            for (const att of parsed.attachments) {
-              const filenameLower = (att.filename || '').toLowerCase()
-              const isXmlName = filenameLower.endsWith('.xml')
-              const isXmlType = att.contentType?.includes('xml')
-              const isTxtName = filenameLower.endsWith('.txt') || filenameLower.endsWith('.edi')
-              const contentStr = att.content ? att.content.toString('utf-8') : ''
-              const trimmedContent = contentStr.trimStart()
-              const hasXmlSignature = contentStr.includes('<cteProc') || contentStr.includes('<CTe')
-              const hasEdiSignature =
-                trimmedContent.startsWith('000') &&
-                (trimmedContent.includes('CON50') || trimmedContent.includes('520') || trimmedContent.includes('522'))
+                // 1. Processamento de EDI PROCEDA CONEMB (Manifesto / Romaneio SSW)
+                if (isTxtName || hasEdiSignature) {
+                  const parsedEdi = parseProcedaConemb(trimmedContent)
+                  if (parsedEdi.isConemb && parsedEdi.totalCtes > 0) {
+                    foundCteInEmail = true
+                    const ediRes = await processEdiLoteInDatabase(dbClient, parsedEdi, orgId, companyId)
+                    result.ctesProcessed += parsedEdi.totalCtes
+                    result.tripsCreated += ediRes.created
+                    result.tripsUpdated += ediRes.updated
 
-              // 1. Processamento de EDI PROCEDA CONEMB (Manifesto / Romaneio SSW)
-              if (isTxtName || hasEdiSignature) {
-                const parsedEdi = parseProcedaConemb(trimmedContent)
+                    for (const d of ediRes.details) {
+                      if (d.status === 'erro') hasDatabaseError = true
+                      result.details.push({
+                        subject: `${subject} • EDI Placa ${d.plate}`,
+                        from: fromAddr,
+                        date: emailDate,
+                        cteNumber: d.cteNumber,
+                        sender: d.sender,
+                        status: d.status,
+                        error: d.error,
+                      })
+                    }
+                    continue
+                  }
+                }
+
+                // 2. Processamento de XML do CT-e
+                if (isXmlName || isXmlType || hasXmlSignature) {
+                  const cteData: ParsedCTeData | null = parseCTeXml(contentStr)
+                  if (cteData) {
+                    foundCteInEmail = true
+                    result.ctesProcessed++
+
+                    // Processa a criação ou atualização da viagem no banco
+                    const tripResult = await processCteTripInDatabase(dbClient, cteData, orgId, companyId)
+
+                    if (tripResult.status === 'criado') {
+                      result.tripsCreated++
+                    } else if (tripResult.status === 'existente') {
+                      result.tripsUpdated++
+                    } else if (tripResult.status === 'erro') {
+                      hasDatabaseError = true
+                    }
+
+                    result.details.push({
+                      subject,
+                      from: fromAddr,
+                      date: emailDate,
+                      cteNumber: cteData.nCT,
+                      cteKey: cteData.chCTe,
+                      sender: cteData.remNome,
+                      destination: `${cteData.destCidade}/${cteData.destUf}`,
+                      status: tripResult.status,
+                      error: tripResult.error,
+                    })
+                  }
+                }
+              }
+            }
+
+            // Fallback se o próprio corpo do e-mail contiver EDI ou XML colado
+            if (!foundCteInEmail && parsed.text) {
+              const trimmedText = parsed.text.trimStart()
+              if (trimmedText.startsWith('000') && (trimmedText.includes('520') || trimmedText.includes('522'))) {
+                const parsedEdi = parseProcedaConemb(trimmedText)
                 if (parsedEdi.isConemb && parsedEdi.totalCtes > 0) {
                   foundCteInEmail = true
                   const ediRes = await processEdiLoteInDatabase(dbClient, parsedEdi, orgId, companyId)
                   result.ctesProcessed += parsedEdi.totalCtes
                   result.tripsCreated += ediRes.created
                   result.tripsUpdated += ediRes.updated
-
                   for (const d of ediRes.details) {
                     if (d.status === 'erro') hasDatabaseError = true
                     result.details.push({
@@ -174,27 +472,16 @@ export async function syncCteEmailsFromMailbox(targetOrgId?: string): Promise<Em
                       error: d.error,
                     })
                   }
-                  continue
                 }
-              }
-
-              // 2. Processamento de XML do CT-e
-              if (isXmlName || isXmlType || hasXmlSignature) {
-                const cteData: ParsedCTeData | null = parseCTeXml(contentStr)
+              } else if (parsed.text.includes('<cteProc') || parsed.text.includes('<CTe')) {
+                const cteData = parseCTeXml(parsed.text)
                 if (cteData) {
                   foundCteInEmail = true
                   result.ctesProcessed++
-
-                  // Processa a criação ou atualização da viagem no banco
                   const tripResult = await processCteTripInDatabase(dbClient, cteData, orgId, companyId)
-
-                  if (tripResult.status === 'criado') {
-                    result.tripsCreated++
-                  } else if (tripResult.status === 'existente') {
-                    result.tripsUpdated++
-                  } else if (tripResult.status === 'erro') {
-                    hasDatabaseError = true
-                  }
+                  if (tripResult.status === 'criado') result.tripsCreated++
+                  else if (tripResult.status === 'existente') result.tripsUpdated++
+                  else if (tripResult.status === 'erro') hasDatabaseError = true
 
                   result.details.push({
                     subject,
@@ -210,78 +497,29 @@ export async function syncCteEmailsFromMailbox(targetOrgId?: string): Promise<Em
                 }
               }
             }
-          }
 
-          // Fallback se o próprio corpo do e-mail contiver EDI ou XML colado
-          if (!foundCteInEmail && parsed.text) {
-            const trimmedText = parsed.text.trimStart()
-            if (trimmedText.startsWith('000') && (trimmedText.includes('520') || trimmedText.includes('522'))) {
-              const parsedEdi = parseProcedaConemb(trimmedText)
-              if (parsedEdi.isConemb && parsedEdi.totalCtes > 0) {
-                foundCteInEmail = true
-                const ediRes = await processEdiLoteInDatabase(dbClient, parsedEdi, orgId, companyId)
-                result.ctesProcessed += parsedEdi.totalCtes
-                result.tripsCreated += ediRes.created
-                result.tripsUpdated += ediRes.updated
-                for (const d of ediRes.details) {
-                  if (d.status === 'erro') hasDatabaseError = true
-                  result.details.push({
-                    subject: `${subject} • EDI Placa ${d.plate}`,
-                    from: fromAddr,
-                    date: emailDate,
-                    cteNumber: d.cteNumber,
-                    sender: d.sender,
-                    status: d.status,
-                    error: d.error,
-                  })
-                }
-              }
-            } else if (parsed.text.includes('<cteProc') || parsed.text.includes('<CTe')) {
-              const cteData = parseCTeXml(parsed.text)
-              if (cteData) {
-                foundCteInEmail = true
-                result.ctesProcessed++
-                const tripResult = await processCteTripInDatabase(dbClient, cteData, orgId, companyId)
-                if (tripResult.status === 'criado') result.tripsCreated++
-                else if (tripResult.status === 'existente') result.tripsUpdated++
-                else if (tripResult.status === 'erro') hasDatabaseError = true
-
-                result.details.push({
-                  subject,
-                  from: fromAddr,
-                  date: emailDate,
-                  cteNumber: cteData.nCT,
-                  cteKey: cteData.chCTe,
-                  sender: cteData.remNome,
-                  destination: `${cteData.destCidade}/${cteData.destUf}`,
-                  status: tripResult.status,
-                  error: tripResult.error,
-                })
-              }
+            if (!foundCteInEmail) {
+              result.details.push({
+                subject,
+                from: fromAddr,
+                date: emailDate,
+                status: 'sem_cte',
+              })
             }
-          }
 
-          if (!foundCteInEmail) {
+            // Marca o e-mail como LIDO (\Seen) usando { uid: true } apenas se não houve erro de gravação no banco
+            if (!hasDatabaseError) {
+              await client.messageFlagsAdd(String(uid), ['\\Seen'], { uid: true })
+            }
+          } catch (msgErr: any) {
+            console.error(`Erro ao processar e-mail UID ${uid}:`, msgErr)
             result.details.push({
-              subject,
-              from: fromAddr,
-              date: emailDate,
-              status: 'sem_cte',
+              subject: `UID ${uid}`,
+              from: 'Desconhecido',
+              status: 'erro',
+              error: msgErr?.message || 'Falha ao decodificar e-mail',
             })
           }
-
-          // Marca o e-mail como LIDO (\Seen) usando { uid: true } apenas se não houve erro de gravação no banco
-          if (!hasDatabaseError) {
-            await client.messageFlagsAdd(String(uid), ['\\Seen'], { uid: true })
-          }
-        } catch (msgErr: any) {
-          console.error(`Erro ao processar e-mail UID ${uid}:`, msgErr)
-          result.details.push({
-            subject: `UID ${uid}`,
-            from: 'Desconhecido',
-            status: 'erro',
-            error: msgErr?.message || 'Falha ao decodificar e-mail',
-          })
         }
       }
     } finally {
@@ -289,9 +527,43 @@ export async function syncCteEmailsFromMailbox(targetOrgId?: string): Promise<Em
     }
 
     await client.logout()
+
+    const nowIso = new Date().toISOString()
+    const syncHealth: SswSyncHealth = {
+      lastSyncAt: nowIso,
+      status: quotaDiagnostic ? 'warning' : 'healthy',
+      emailAccount: user,
+      totalEmailsChecked: result.totalEmailsChecked,
+      tripsCreated: result.tripsCreated,
+      tripsUpdated: result.tripsUpdated,
+      quotaUsagePercent,
+      diagnostic: quotaDiagnostic,
+    }
+
+    await persistSswSyncHealth(dbClient, orgId, syncHealth)
+
+    result.diagnostic = quotaDiagnostic
+    result.health = syncHealth
     return result
   } catch (err: any) {
     console.error('Erro na sincronização de e-mails IMAP:', err)
+    const diag = classifyImapError(err)
+    const errorMsg = err?.message || 'Falha ao sincronizar e-mails do servidor Hostinger.'
+    const failedHealth: SswSyncHealth = {
+      lastSyncAt: new Date().toISOString(),
+      status: 'error',
+      emailAccount: user,
+      totalEmailsChecked: result.totalEmailsChecked,
+      tripsCreated: result.tripsCreated,
+      tripsUpdated: result.tripsUpdated,
+      error: errorMsg,
+      diagnostic: diag,
+    }
+
+    if (resolvedOrgId) {
+      await persistSswSyncHealth(dbClient, resolvedOrgId, failedHealth)
+    }
+
     return {
       success: false,
       totalEmailsChecked: result.totalEmailsChecked,
@@ -299,7 +571,9 @@ export async function syncCteEmailsFromMailbox(targetOrgId?: string): Promise<Em
       tripsCreated: result.tripsCreated,
       tripsUpdated: result.tripsUpdated,
       details: result.details,
-      error: err?.message || 'Falha ao sincronizar e-mails do servidor Hostinger.',
+      error: errorMsg,
+      diagnostic: diag,
+      health: failedHealth,
     }
   } finally {
     dbClient.release()

@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { createTrip, sendTelegramTripStatusPromptAction } from "../actions"
-import { CteXmlImportCard } from "@/components/CteXmlImportCard"
+import { EdiManifestImportCard } from "@/components/ImportEdiButton"
 import {
   Truck,
   MapPin,
@@ -118,61 +118,6 @@ export function NewTransportForm({
   const handleSenderChange = (senderId: string) => {
     setSelectedSenderId(senderId)
     setSelectedRecipientId('')
-    setValidationError(null)
-  }
-
-  const handleClearXml = () => {
-    setCteNumber('')
-    setCteKey('')
-    setSefazMetadata(null)
-    setGeneralInvoices('')
-    setSelectedSenderId('')
-    setSelectedRecipientId('')
-    setValidationError(null)
-  }
-
-  const handleXmlImported = (data: {
-    cteNumber: string
-    serie: number
-    cteKey: string
-    invoices: string[]
-    senderId?: string
-    recipientId?: string
-    driverId?: string
-    branchId?: string
-    sefazMetadata?: any
-    newSender?: any
-    newRecipient?: any
-  }) => {
-    setCteNumber(data.cteNumber)
-    setCteKey(data.cteKey)
-    if (data.branchId) setSelectedBranchId(data.branchId)
-    if (data.driverId) setSelectedDriverId(data.driverId)
-    if (data.sefazMetadata) setSefazMetadata(data.sefazMetadata)
-
-    if (data.newSender) {
-      setActiveSenders((prev) => {
-        const exists = prev.some((s) => s.id === data.newSender.id)
-        return exists ? prev : [data.newSender, ...prev]
-      })
-    }
-    if (data.senderId) {
-      setSelectedSenderId(data.senderId)
-    }
-
-    if (data.newRecipient) {
-      setActiveRecipients((prev) => {
-        const exists = prev.some((r) => r.id === data.newRecipient.id)
-        return exists ? prev : [data.newRecipient, ...prev]
-      })
-    }
-    if (data.recipientId) {
-      setSelectedRecipientId(data.recipientId)
-    }
-
-    if (data.invoices && data.invoices.length > 0) {
-      setGeneralInvoices(data.invoices.join(', '))
-    }
     setValidationError(null)
   }
 
@@ -483,20 +428,17 @@ export function NewTransportForm({
 
   return (
     <div className="max-w-3xl mx-auto space-y-6">
-      {/* IMPORTAÇÃO EXPRESSA VIA ARQUIVO XML DO CT-E */}
-      <CteXmlImportCard
-        onXmlImported={handleXmlImported}
-        onClear={handleClearXml}
-      />
+      {/* IMPORTAÇÃO DIRETA DE MANIFESTO / ROMANEIO VIA EDI SSW */}
+      <EdiManifestImportCard />
 
       <Card className="shadow-sm">
         <CardHeader>
           <CardTitle className="text-xl font-bold flex items-center gap-2">
             <Truck className="w-5 h-5 text-[#0D9488]" />
-            Emissão de Transporte de Carga
+            Emissão Manual de Transporte
           </CardTitle>
           <CardDescription>
-            Importe o XML do CT-e emitido no SSW ou preencha os dados manualmente para auditoria.
+            Ou preencha os dados abaixo caso queira emitir um transporte avulso manualmente.
           </CardDescription>
         </CardHeader>
 
