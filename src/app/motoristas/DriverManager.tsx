@@ -132,7 +132,7 @@ const CreateDriverForm = memo(function CreateDriverForm({
         <CardDescription>Cadastre motoristas com WhatsApp e PIN para despacho instantâneo.</CardDescription>
       </CardHeader>
       <CardContent>
-        <form onSubmit={handleSubmit} className="space-y-4">
+        <form onSubmit={handleSubmit} className="space-y-4" autoComplete="off">
           {companies.length > 1 && (
             <div className="space-y-1.5">
               <Label htmlFor="create_company_id">Empresa Vinculada</Label>
@@ -156,6 +156,8 @@ const CreateDriverForm = memo(function CreateDriverForm({
             <Label htmlFor="create_name">Nome Completo</Label>
             <Input
               id="create_name"
+              name="driver_full_name"
+              autoComplete="off"
               value={name}
               onChange={(e) => setName(e.target.value)}
               placeholder="Ex: Roberto Silveira"
@@ -168,6 +170,8 @@ const CreateDriverForm = memo(function CreateDriverForm({
             <Label htmlFor="create_phone">WhatsApp / Celular (com DDD)</Label>
             <Input
               id="create_phone"
+              name="driver_phone_contact"
+              autoComplete="off"
               value={phone}
               onChange={(e) => setPhone(formatPhone(e.target.value))}
               placeholder="(11) 99999-8888"
@@ -180,6 +184,8 @@ const CreateDriverForm = memo(function CreateDriverForm({
               <Label htmlFor="create_plate">Placa Padrão</Label>
               <Input
                 id="create_plate"
+                name="driver_default_plate"
+                autoComplete="off"
                 value={defaultPlate}
                 onChange={(e) => setDefaultPlate(e.target.value.toUpperCase())}
                 placeholder="ABC1D23"
@@ -190,6 +196,8 @@ const CreateDriverForm = memo(function CreateDriverForm({
               <Label htmlFor="create_cpf">CPF (opcional)</Label>
               <Input
                 id="create_cpf"
+                name="driver_doc_cpf"
+                autoComplete="off"
                 value={cpf}
                 onChange={(e) => setCpf(formatCpf(e.target.value))}
                 placeholder="000.000.000-00"
@@ -204,7 +212,9 @@ const CreateDriverForm = memo(function CreateDriverForm({
             </Label>
             <Input
               id="create_pin"
+              name="driver_security_pin"
               type="password"
+              autoComplete="new-password"
               inputMode="numeric"
               maxLength={4}
               value={pin}
@@ -224,6 +234,9 @@ const CreateDriverForm = memo(function CreateDriverForm({
             </Label>
             <Input
               id="create_telegram"
+              name="driver_telegram_handle"
+              type="text"
+              autoComplete="off"
               value={telegramUsername}
               onChange={(e) => setTelegramUsername(e.target.value)}
               placeholder="Ex: @robertomotorista ou Chat ID"
@@ -379,6 +392,8 @@ const DriverCard = memo(function DriverCard({
               </Label>
               <Input
                 value={editPin}
+                name="edit_driver_pin"
+                autoComplete="new-password"
                 maxLength={4}
                 onChange={(e) => setEditPin(e.target.value.replace(/\D/g, ''))}
                 className="h-9 text-xs font-mono font-bold tracking-widest"
@@ -391,6 +406,8 @@ const DriverCard = memo(function DriverCard({
               <Label className="text-xs">Telegram @usuário ou Chat ID</Label>
               <Input
                 value={editTelegram}
+                name="edit_driver_telegram"
+                autoComplete="off"
                 onChange={(e) => setEditTelegram(e.target.value)}
                 className="h-9 text-xs font-mono"
                 placeholder="@motorista ou Chat ID"

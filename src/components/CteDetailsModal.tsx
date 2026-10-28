@@ -279,12 +279,24 @@ export function CteDetailsModal({
                           )}
                         </div>
 
-                        {c.remCidade && (
-                          <div className="text-xs text-stone-600 flex items-center gap-1 font-medium">
-                            <MapPin className="w-3 h-3 text-[#0D9488]" />
-                            <span>{c.remCidade}/{c.remUf || 'SP'}</span>
-                          </div>
-                        )}
+                        <div className="flex items-center gap-2 text-xs text-stone-600 flex-wrap">
+                          {c.destNome && (
+                            <span className="font-medium text-[#1C1917]">
+                              Para: <strong>{c.destNome}</strong>
+                            </span>
+                          )}
+                          {(c.destCidade || c.destUf) && (
+                            <div className="flex items-center gap-1 font-medium text-emerald-700 bg-emerald-50/70 px-1.5 py-0.5 rounded border border-emerald-200/60">
+                              <MapPin className="w-3 h-3 text-emerald-600" />
+                              <span>{c.destCidade ? `${c.destCidade}${c.destUf ? `/${c.destUf}` : ''}` : `UF: ${c.destUf}`}</span>
+                            </div>
+                          )}
+                          {c.destCnpj && (
+                            <span className="text-[10px] font-mono text-stone-500 bg-stone-100 px-1.5 py-0.2 rounded border border-stone-200">
+                              CNPJ: {c.destCnpj}
+                            </span>
+                          )}
+                        </div>
                       </div>
 
                       {/* NFs Transportadas neste CT-e */}

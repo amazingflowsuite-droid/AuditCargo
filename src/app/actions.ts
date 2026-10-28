@@ -2418,7 +2418,7 @@ export async function getSenders(organizationId?: string) {
   const supabase = await createClient()
   const { data, error } = await supabase
     .from('senders')
-    .select('id, name, cnpj, ie, address, city, zip_code, phone, email, franchise_hours, demurrage_hourly_rate, company_id, created_at, companies(name), recipients(*)')
+    .select('id, name, cnpj, ie, address, city, zip_code, phone, email, franchise_hours, demurrage_hourly_rate, vehicle_franchises, company_id, created_at, companies(name), recipients(*)')
     .eq('organization_id', targetOrgId)
     .order('created_at', { ascending: false })
 
@@ -2462,6 +2462,15 @@ export async function createSender(formData: FormData) {
   const franchise_hours = isNaN(rawFranchise) || rawFranchise < 0 ? 0 : rawFranchise
   const rawDemurrage = formData.get('demurrage_hourly_rate') ? parseFloat(formData.get('demurrage_hourly_rate') as string) : 0
   const demurrage_hourly_rate = isNaN(rawDemurrage) || rawDemurrage < 0 ? 0 : rawDemurrage
+  const rawVehicleFranchises = (formData.get('vehicle_franchises') as string) || ''
+  let vehicle_franchises: any[] = []
+  if (rawVehicleFranchises) {
+    try {
+      vehicle_franchises = JSON.parse(rawVehicleFranchises)
+    } catch (e) {
+      vehicle_franchises = []
+    }
+  }
 
   if (!name || name.length < 3) {
     return { error: 'Razão Social / Nome do Remetente deve ter pelo menos 3 caracteres.' }
@@ -2486,10 +2495,11 @@ export async function createSender(formData: FormData) {
         email: email || null,
         franchise_hours,
         demurrage_hourly_rate,
+        vehicle_franchises,
         organization_id: user.organization_id,
       },
     ])
-    .select('id, name, cnpj, ie, address, city, zip_code, phone, email, franchise_hours, demurrage_hourly_rate, company_id, created_at, companies(name), recipients(*)')
+    .select('id, name, cnpj, ie, address, city, zip_code, phone, email, franchise_hours, demurrage_hourly_rate, vehicle_franchises, company_id, created_at, companies(name), recipients(*)')
     .single()
 
   if (error) return { error: error.message }
@@ -2531,6 +2541,15 @@ export async function updateSender(id: string, formData: FormData) {
   const franchise_hours = isNaN(rawFranchise) || rawFranchise < 0 ? 0 : rawFranchise
   const rawDemurrage = formData.get('demurrage_hourly_rate') ? parseFloat(formData.get('demurrage_hourly_rate') as string) : 0
   const demurrage_hourly_rate = isNaN(rawDemurrage) || rawDemurrage < 0 ? 0 : rawDemurrage
+  const rawVehicleFranchises = (formData.get('vehicle_franchises') as string) || ''
+  let vehicle_franchises: any[] = []
+  if (rawVehicleFranchises) {
+    try {
+      vehicle_franchises = JSON.parse(rawVehicleFranchises)
+    } catch (e) {
+      vehicle_franchises = []
+    }
+  }
 
   if (!name || name.length < 3) {
     return { error: 'Razão Social / Nome do Remetente deve ter pelo menos 3 caracteres.' }
@@ -2554,10 +2573,11 @@ export async function updateSender(id: string, formData: FormData) {
       email: email || null,
       franchise_hours,
       demurrage_hourly_rate,
+      vehicle_franchises,
     })
     .eq('id', id)
     .eq('organization_id', user.organization_id)
-    .select('id, name, cnpj, ie, address, city, zip_code, phone, email, franchise_hours, demurrage_hourly_rate, company_id, created_at, companies(name), recipients(*)')
+    .select('id, name, cnpj, ie, address, city, zip_code, phone, email, franchise_hours, demurrage_hourly_rate, vehicle_franchises, company_id, created_at, companies(name), recipients(*)')
     .single()
 
   if (error) return { error: error.message }
@@ -2598,7 +2618,7 @@ export async function getRecipients(senderId?: string, organizationId?: string) 
   const supabase = await createClient()
   let query = supabase
     .from('recipients')
-    .select('id, name, cnpj, ie, address, city, zip_code, phone, email, company_id, sender_id, created_at, companies(name), senders(name, city)')
+    .select('id, name, cnpj, ie, address, city, zip_code, phone, email, company_id, sender_id, has_appointment_rule, appointment_notes, created_at, companies(name), senders(name, city)')
     .eq('organization_id', targetOrgId)
     .order('created_at', { ascending: false })
 
@@ -2659,6 +2679,8 @@ export async function createRecipient(formData: FormData) {
   const ie = ((formData.get('ie') as string) || '').trim()
   const phone = ((formData.get('phone') as string) || '').trim()
   const email = ((formData.get('email') as string) || '').trim()
+  const has_appointment_rule = formData.get('has_appointment_rule') === 'true'
+  const appointment_notes = ((formData.get('appointment_notes') as string) || '').trim() || null
 
   if (!name || name.length < 3) {
     return { error: 'Nome do Destinatário deve ter pelo menos 3 caracteres.' }
@@ -2674,6 +2696,8 @@ export async function createRecipient(formData: FormData) {
     cnpj: cnpj || null,
     ie: ie || null,
     phone: phone || null,
+    has_appointment_rule,
+    appointment_notes,
     organization_id: user.organization_id,
   }
 
@@ -2750,6 +2774,8 @@ export async function updateRecipient(id: string, formData: FormData) {
   const ie = ((formData.get('ie') as string) || '').trim()
   const phone = ((formData.get('phone') as string) || '').trim()
   const email = ((formData.get('email') as string) || '').trim()
+  const has_appointment_rule = formData.get('has_appointment_rule') === 'true'
+  const appointment_notes = ((formData.get('appointment_notes') as string) || '').trim() || null
 
   if (!name || name.length < 3) {
     return { error: 'Nome do Destinatário deve ter pelo menos 3 caracteres.' }
@@ -2766,6 +2792,8 @@ export async function updateRecipient(id: string, formData: FormData) {
     ie: ie || null,
     phone: phone || null,
     email: email || null,
+    has_appointment_rule,
+    appointment_notes,
   }
 
   let { data, error } = await supabase
@@ -2773,7 +2801,7 @@ export async function updateRecipient(id: string, formData: FormData) {
     .update(updateObj)
     .eq('id', id)
     .eq('organization_id', user.organization_id)
-    .select('id, name, cnpj, ie, address, city, zip_code, phone, email, company_id, sender_id, created_at, companies(name), senders(name, city)')
+    .select('id, name, cnpj, ie, address, city, zip_code, phone, email, company_id, sender_id, has_appointment_rule, appointment_notes, created_at, companies(name), senders(name, city)')
     .single()
 
   if (error && error.message?.includes('email')) {
@@ -2783,7 +2811,7 @@ export async function updateRecipient(id: string, formData: FormData) {
       .update(updateObj)
       .eq('id', id)
       .eq('organization_id', user.organization_id)
-      .select('id, name, cnpj, ie, address, city, zip_code, phone, email, company_id, sender_id, created_at, companies(name), senders(name, city)')
+      .select('id, name, cnpj, ie, address, city, zip_code, phone, email, company_id, sender_id, has_appointment_rule, appointment_notes, created_at, companies(name), senders(name, city)')
       .single()
     data = retry.data
     error = retry.error

@@ -29,7 +29,163 @@ import {
   Mail,
   AlertCircle,
   Search,
+  Truck,
+  Clock,
 } from "lucide-react"
+
+// ==========================================
+// 🚛 TABELA E EDITOR DE FRANQUIAS POR TIPO DE VEÍCULO
+// ==========================================
+
+export interface VehicleFranchiseRule {
+  vehicle_type: string
+  vehicle_label: string
+  franchise_hours: number
+  hourly_rate: number
+}
+
+const PRESET_VEHICLES = [
+  { type: 'carreta', label: 'Carreta / Bitrem', defaultHours: 5, defaultRate: 120 },
+  { type: 'truck', label: 'Truck', defaultHours: 4, defaultRate: 85 },
+  { type: 'toco', label: 'Toco', defaultHours: 3, defaultRate: 65 },
+  { type: 'vuc', label: 'VUC / 3/4', defaultHours: 2, defaultRate: 50 },
+  { type: 'van', label: 'Van / Fiorino / Utilitário', defaultHours: 1, defaultRate: 35 },
+]
+
+function VehicleFranchisesEditor({
+  rules,
+  onChange,
+}: {
+  rules: VehicleFranchiseRule[]
+  onChange: (rules: VehicleFranchiseRule[]) => void
+}) {
+  const [selectedPreset, setSelectedPreset] = useState(PRESET_VEHICLES[0].type)
+  const [isOpen, setIsOpen] = useState(rules.length > 0)
+
+  const handleAdd = () => {
+    const preset = PRESET_VEHICLES.find((v) => v.type === selectedPreset) || PRESET_VEHICLES[0]
+    if (rules.some((r) => r.vehicle_type === preset.type)) {
+      alert(`O tipo de veículo "${preset.label}" já está adicionado na tabela de franquias.`)
+      return
+    }
+    onChange([
+      ...rules,
+      {
+        vehicle_type: preset.type,
+        vehicle_label: preset.label,
+        franchise_hours: preset.defaultHours,
+        hourly_rate: preset.defaultRate,
+      },
+    ])
+  }
+
+  const handleRemove = (index: number) => {
+    onChange(rules.filter((_, i) => i !== index))
+  }
+
+  const handleUpdate = (index: number, field: keyof VehicleFranchiseRule, val: any) => {
+    const next = [...rules]
+    next[index] = { ...next[index], [field]: val }
+    onChange(next)
+  }
+
+  return (
+    <div className="p-3 rounded-lg border border-[#E7E5E4] bg-[#F5F5F4]/60 space-y-2.5">
+      <div className="flex items-center justify-between">
+        <button
+          type="button"
+          onClick={() => setIsOpen(!isOpen)}
+          className="flex items-center gap-1.5 text-xs font-semibold text-[#1C1917] hover:text-[#0D9488] cursor-pointer"
+        >
+          <Truck className="w-3.5 h-3.5 text-[#0D9488]" />
+          <span>Franquias Específicas por Veículo ({rules.length})</span>
+          {isOpen ? <ChevronUp className="w-3.5 h-3.5 text-stone-400" /> : <ChevronDown className="w-3.5 h-3.5 text-stone-400" />}
+        </button>
+      </div>
+
+      {isOpen && (
+        <div className="space-y-2 pt-1 animate-in fade-in duration-150">
+          <div className="flex items-center gap-2">
+            <select
+              value={selectedPreset}
+              onChange={(e) => setSelectedPreset(e.target.value)}
+              className="text-xs h-8 bg-white border border-[#D6D3D1] rounded-[6px] px-2 flex-1"
+            >
+              {PRESET_VEHICLES.map((v) => (
+                <option key={v.type} value={v.type}>
+                  {v.label} (Sugestão: {v.defaultHours}h • R$ {v.defaultRate}/h)
+                </option>
+              ))}
+            </select>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleAdd}
+              className="h-8 text-xs gap-1 shrink-0 bg-white"
+            >
+              <Plus className="w-3 h-3" /> Adicionar
+            </Button>
+          </div>
+
+          {rules.length === 0 ? (
+            <p className="text-[11px] text-stone-500 font-mono italic">
+              Nenhum veículo adicionado. Aplica-se a Franquia Geral informada acima.
+            </p>
+          ) : (
+            <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+              {rules.map((rule, idx) => (
+                <div
+                  key={idx}
+                  className="flex items-center gap-2 p-2 bg-white rounded-md border border-[#E7E5E4] text-xs"
+                >
+                  <span className="font-semibold text-[#0F172A] min-w-[110px] truncate" title={rule.vehicle_label}>
+                    {rule.vehicle_label}
+                  </span>
+
+                  <div className="flex items-center gap-1">
+                    <span className="text-[10px] text-stone-500 font-mono">Franq:</span>
+                    <input
+                      type="number"
+                      step="0.5"
+                      min="0"
+                      value={rule.franchise_hours}
+                      onChange={(e) => handleUpdate(idx, 'franchise_hours', parseFloat(e.target.value) || 0)}
+                      className="w-12 h-7 text-xs px-1 font-mono border border-stone-200 rounded text-center"
+                    />
+                    <span className="text-[10px] text-stone-500 font-mono">h</span>
+                  </div>
+
+                  <div className="flex items-center gap-1">
+                    <span className="text-[10px] text-stone-500 font-mono">R$</span>
+                    <input
+                      type="number"
+                      step="1"
+                      min="0"
+                      value={rule.hourly_rate}
+                      onChange={(e) => handleUpdate(idx, 'hourly_rate', parseFloat(e.target.value) || 0)}
+                      className="w-14 h-7 text-xs px-1 font-mono border border-stone-200 rounded text-center"
+                    />
+                    <span className="text-[10px] text-stone-500 font-mono">/h</span>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => handleRemove(idx)}
+                    className="p-1 text-stone-400 hover:text-red-600 rounded ml-auto cursor-pointer"
+                    title="Remover veículo"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
 
 // ==========================================
 // 📝 SUB-COMPONENTE: FORMULÁRIO DE NOVO REMETENTE
@@ -56,6 +212,8 @@ const CreateSenderForm = memo(function CreateSenderForm({
   const [phone, setPhone] = useState('')
   const [email, setEmail] = useState('')
   const [franchiseHours, setFranchiseHours] = useState('0')
+  const [demurrageHourlyRate, setDemurrageHourlyRate] = useState('0')
+  const [vehicleFranchises, setVehicleFranchises] = useState<VehicleFranchiseRule[]>([])
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -76,6 +234,8 @@ const CreateSenderForm = memo(function CreateSenderForm({
     formData.append('phone', phone)
     formData.append('email', email)
     formData.append('franchise_hours', franchiseHours)
+    formData.append('demurrage_hourly_rate', demurrageHourlyRate)
+    formData.append('vehicle_franchises', JSON.stringify(vehicleFranchises))
 
     startTransition(async () => {
       const res = await createSender(formData)
@@ -93,6 +253,8 @@ const CreateSenderForm = memo(function CreateSenderForm({
         setPhone('')
         setEmail('')
         setFranchiseHours('0')
+        setDemurrageHourlyRate('0')
+        setVehicleFranchises([])
       }
     })
   }
@@ -194,18 +356,17 @@ const CreateSenderForm = memo(function CreateSenderForm({
             </div>
           </div>
 
-          <div className="space-y-1">
-            <Label htmlFor="create_email">E-mail para Notificações</Label>
-            <Input
-              id="create_email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              placeholder="Ex: notificacao@remetente.com.br"
-            />
-          </div>
-
           <div className="grid grid-cols-2 gap-2">
+            <div className="space-y-1">
+              <Label htmlFor="create_email">E-mail para Notificações</Label>
+              <Input
+                id="create_email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="Ex: notificacao@remetente.com.br"
+              />
+            </div>
             <div className="space-y-1">
               <Label htmlFor="create_phone">Telefone / Fone</Label>
               <Input
@@ -215,24 +376,52 @@ const CreateSenderForm = memo(function CreateSenderForm({
                 placeholder="(11) 99999-9999"
               />
             </div>
-            <div className="space-y-1">
-              <Label htmlFor="create_franchise">Franquia de Espera</Label>
-              <div className="relative">
-                <Input
-                  id="create_franchise"
-                  type="number"
-                  step="0.5"
-                  min="0"
-                  value={franchiseHours}
-                  onChange={(e) => setFranchiseHours(e.target.value)}
-                  placeholder="0"
-                  className="pr-12"
-                />
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-mono text-[#78716C] pointer-events-none select-none">
-                  horas
-                </span>
+          </div>
+
+          <div className="p-2.5 rounded-lg border border-[#E7E5E4] bg-[#F5F5F4]/40 space-y-2">
+            <div className="grid grid-cols-2 gap-2">
+              <div className="space-y-1">
+                <Label htmlFor="create_franchise" className="text-xs">Franquia Geral</Label>
+                <div className="relative">
+                  <Input
+                    id="create_franchise"
+                    type="number"
+                    step="0.5"
+                    min="0"
+                    value={franchiseHours}
+                    onChange={(e) => setFranchiseHours(e.target.value)}
+                    placeholder="0"
+                    className="pr-8 bg-white h-8 text-xs"
+                  />
+                  <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs font-mono text-[#78716C] pointer-events-none select-none">
+                    h
+                  </span>
+                </div>
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="create_demurrage" className="text-xs">Valor Estadia Geral (R$/h)</Label>
+                <div className="relative">
+                  <Input
+                    id="create_demurrage"
+                    type="number"
+                    step="1"
+                    min="0"
+                    value={demurrageHourlyRate}
+                    onChange={(e) => setDemurrageHourlyRate(e.target.value)}
+                    placeholder="0"
+                    className="pr-10 bg-white h-8 text-xs"
+                  />
+                  <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs font-mono text-[#78716C] pointer-events-none select-none">
+                    /h
+                  </span>
+                </div>
               </div>
             </div>
+
+            <VehicleFranchisesEditor
+              rules={vehicleFranchises}
+              onChange={setVehicleFranchises}
+            />
           </div>
 
           <Button type="submit" className="w-full mt-2" disabled={isPending}>
@@ -440,6 +629,12 @@ const SenderCard = memo(function SenderCard({
   const [editFranchiseHours, setEditFranchiseHours] = useState(
     sender.franchise_hours !== undefined ? String(sender.franchise_hours) : '0'
   )
+  const [editDemurrageHourlyRate, setEditDemurrageHourlyRate] = useState(
+    sender.demurrage_hourly_rate !== undefined ? String(sender.demurrage_hourly_rate) : '0'
+  )
+  const [editVehicleFranchises, setEditVehicleFranchises] = useState<VehicleFranchiseRule[]>(
+    Array.isArray(sender.vehicle_franchises) ? sender.vehicle_franchises : []
+  )
 
   const subRecipients = sender.recipients || []
 
@@ -461,6 +656,8 @@ const SenderCard = memo(function SenderCard({
     formData.append('phone', editPhone)
     formData.append('email', editEmail)
     formData.append('franchise_hours', editFranchiseHours)
+    formData.append('demurrage_hourly_rate', editDemurrageHourlyRate)
+    formData.append('vehicle_franchises', JSON.stringify(editVehicleFranchises))
 
     onSaveEdit(formData)
   }
@@ -575,7 +772,7 @@ const SenderCard = memo(function SenderCard({
                 />
               </div>
               <div>
-                <Label className="text-[11px]">Franquia de Espera</Label>
+                <Label className="text-[11px]">Franquia Geral</Label>
                 <div className="relative mt-0.5">
                   <Input
                     type="number"
@@ -583,14 +780,36 @@ const SenderCard = memo(function SenderCard({
                     min="0"
                     value={editFranchiseHours}
                     onChange={(e) => setEditFranchiseHours(e.target.value)}
-                    className="h-8 text-xs pr-12"
+                    className="h-8 text-xs pr-8"
                   />
-                  <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[11px] font-mono text-[#78716C] pointer-events-none select-none">
-                    horas
+                  <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-mono text-[#78716C] pointer-events-none select-none">
+                    h
                   </span>
                 </div>
               </div>
             </div>
+
+            <div>
+              <Label className="text-[11px]">Valor Estadia Geral (R$/h)</Label>
+              <div className="relative mt-0.5">
+                <Input
+                  type="number"
+                  step="1"
+                  min="0"
+                  value={editDemurrageHourlyRate}
+                  onChange={(e) => setEditDemurrageHourlyRate(e.target.value)}
+                  className="h-8 text-xs pr-8"
+                />
+                <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] font-mono text-[#78716C] pointer-events-none select-none">
+                  /h
+                </span>
+              </div>
+            </div>
+
+            <VehicleFranchisesEditor
+              rules={editVehicleFranchises}
+              onChange={setEditVehicleFranchises}
+            />
 
             <div className="flex items-center gap-2 pt-1">
               <Button
@@ -646,12 +865,35 @@ const SenderCard = memo(function SenderCard({
                 </div>
               )}
               {sender.franchise_hours !== undefined && sender.franchise_hours > 0 && (
-                <div className="flex items-center gap-1.5 font-mono text-[11px] text-[#CA8A04] bg-yellow-50 px-1.5 py-0.5 rounded-[4px] border border-yellow-200">
-                  <span>⏱ Franquia: {sender.franchise_hours}h</span>
+                <div className="flex items-center gap-1.5 font-mono text-[11px] text-amber-800 bg-amber-50 px-2 py-0.5 rounded-[4px] border border-amber-200">
+                  <span>⏱ Franquia Geral: {sender.franchise_hours}h</span>
+                  {sender.demurrage_hourly_rate > 0 && (
+                    <span className="font-semibold text-amber-700">• R$ {sender.demurrage_hourly_rate}/h</span>
+                  )}
                 </div>
               )}
             </div>
           </div>
+
+          {/* REGRAS DE FRANQUIA POR VEÍCULO */}
+          {Array.isArray(sender.vehicle_franchises) && sender.vehicle_franchises.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 pt-1">
+              <span className="text-[10px] font-semibold text-stone-500 uppercase tracking-wide flex items-center gap-1">
+                <Truck className="w-3 h-3 text-[#0D9488]" /> Por Veículo:
+              </span>
+              {sender.vehicle_franchises.map((vf: VehicleFranchiseRule, i: number) => (
+                <span
+                  key={i}
+                  className="inline-flex items-center gap-1 text-[11px] font-mono bg-[#F5F5F4] text-[#1C1917] border border-[#E7E5E4] px-2 py-0.5 rounded"
+                >
+                  <span className="font-semibold">{vf.vehicle_label}:</span> {vf.franchise_hours}h
+                  <span className="text-teal-700 font-medium">
+                    {vf.hourly_rate > 0 ? `(R$ ${vf.hourly_rate}/h)` : ''}
+                  </span>
+                </span>
+              ))}
+            </div>
+          )}
 
           {sender.address && (
             <div className="text-[11px] text-[#78716C] truncate">{sender.address}</div>

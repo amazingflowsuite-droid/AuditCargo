@@ -22,6 +22,8 @@ import {
   Mail,
   AlertCircle,
   Search,
+  Calendar,
+  Clock,
 } from "lucide-react"
 
 // ==========================================
@@ -51,6 +53,8 @@ const CreateRecipientForm = memo(function CreateRecipientForm({
   const [cnpj, setCnpj] = useState('')
   const [ie, setIe] = useState('')
   const [phone, setPhone] = useState('')
+  const [hasAppointmentRule, setHasAppointmentRule] = useState(false)
+  const [appointmentNotes, setAppointmentNotes] = useState('')
 
   const filteredByCompanySenders = useMemo(() => {
     return senders.filter((s) => !companyId || s.company_id === companyId)
@@ -75,6 +79,8 @@ const CreateRecipientForm = memo(function CreateRecipientForm({
     formData.append('cnpj', cnpj)
     formData.append('ie', ie)
     formData.append('phone', phone)
+    formData.append('has_appointment_rule', String(hasAppointmentRule))
+    formData.append('appointment_notes', appointmentNotes)
 
     startTransition(async () => {
       const res = await createRecipient(formData)
@@ -96,6 +102,8 @@ const CreateRecipientForm = memo(function CreateRecipientForm({
         setCnpj('')
         setIe('')
         setPhone('')
+        setHasAppointmentRule(false)
+        setAppointmentNotes('')
       }
     })
   }
@@ -236,6 +244,36 @@ const CreateRecipientForm = memo(function CreateRecipientForm({
             </div>
           </div>
 
+          {/* Regra de Agendamento */}
+          <div className="p-3 rounded-md border border-[#E7E5E4] bg-[#F5F5F4]/60 space-y-2">
+            <label className="flex items-center gap-2 cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={hasAppointmentRule}
+                onChange={(e) => setHasAppointmentRule(e.target.checked)}
+                className="w-4 h-4 rounded text-[#0D9488] focus:ring-[#0D9488] border-stone-300"
+              />
+              <span className="text-xs font-semibold text-[#1C1917] flex items-center gap-1.5">
+                <Calendar className="w-3.5 h-3.5 text-[#0D9488]" />
+                Possui Regra de Agendamento de Entrega
+              </span>
+            </label>
+            {hasAppointmentRule && (
+              <div className="space-y-1 pt-1 animate-in fade-in duration-150">
+                <Label htmlFor="create_app_notes" className="text-[11px] text-[#57534E]">
+                  Janela / Instruções de Horário Marcado (opcional)
+                </Label>
+                <Input
+                  id="create_app_notes"
+                  value={appointmentNotes}
+                  onChange={(e) => setAppointmentNotes(e.target.value)}
+                  placeholder="Ex: Seg a Sex das 08h às 11h, agendar com 48h de antecedência"
+                  className="text-xs h-8 bg-white"
+                />
+              </div>
+            )}
+          </div>
+
           <Button type="submit" className="w-full mt-2" disabled={isPending}>
             {isPending ? 'Salvando...' : 'Salvar Destinatário'}
           </Button>
@@ -291,6 +329,8 @@ const RecipientCard = memo(function RecipientCard({
   const [editCnpj, setEditCnpj] = useState(formatCNPJ(recipient.cnpj || ''))
   const [editIe, setEditIe] = useState(recipient.ie || '')
   const [editPhone, setEditPhone] = useState(formatPhone(recipient.phone || ''))
+  const [editHasAppointmentRule, setEditHasAppointmentRule] = useState(Boolean(recipient.has_appointment_rule))
+  const [editAppointmentNotes, setEditAppointmentNotes] = useState(recipient.appointment_notes || '')
 
   const filteredByCompanySenders = useMemo(() => {
     return senders.filter((s) => !editCompanyId || s.company_id === editCompanyId)
@@ -314,6 +354,8 @@ const RecipientCard = memo(function RecipientCard({
     formData.append('cnpj', editCnpj)
     formData.append('ie', editIe)
     formData.append('phone', editPhone)
+    formData.append('has_appointment_rule', String(editHasAppointmentRule))
+    formData.append('appointment_notes', editAppointmentNotes)
 
     onSaveEdit(formData)
   }
@@ -336,6 +378,16 @@ const RecipientCard = memo(function RecipientCard({
             ) : (
               <span className="text-[11px] font-mono px-2 py-0.5 rounded-[4px] bg-[#F5F5F4] text-[#78716C] border border-[#E7E5E4]">
                 Sem remetente vinculado
+              </span>
+            )}
+            {recipient.has_appointment_rule ? (
+              <span className="text-[11px] font-semibold px-2 py-0.5 rounded-[4px] bg-amber-50 text-amber-800 border border-amber-300 flex items-center gap-1">
+                <Calendar className="w-3 h-3 text-amber-600" />
+                Agendamento Obrigatório
+              </span>
+            ) : (
+              <span className="text-[10px] font-medium px-2 py-0.5 rounded-[4px] bg-stone-100 text-stone-600 border border-stone-200">
+                Sem Agendamento
               </span>
             )}
           </div>
@@ -476,6 +528,35 @@ const RecipientCard = memo(function RecipientCard({
               </div>
             </div>
 
+            {/* Regra de Agendamento na Edição */}
+            <div className="p-2.5 rounded-md border border-[#E7E5E4] bg-[#F5F5F4]/60 space-y-1.5">
+              <label className="flex items-center gap-2 cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={editHasAppointmentRule}
+                  onChange={(e) => setEditHasAppointmentRule(e.target.checked)}
+                  className="w-3.5 h-3.5 rounded text-[#0D9488] focus:ring-[#0D9488] border-stone-300"
+                />
+                <span className="text-xs font-semibold text-[#1C1917] flex items-center gap-1.5">
+                  <Calendar className="w-3.5 h-3.5 text-[#0D9488]" />
+                  Exige Agendamento Prévio de Entrega
+                </span>
+              </label>
+              {editHasAppointmentRule && (
+                <div className="space-y-1 pt-1">
+                  <Label className="text-[10px] text-[#57534E]">
+                    Janela / Instruções de Horário Marcado (opcional)
+                  </Label>
+                  <Input
+                    value={editAppointmentNotes}
+                    onChange={(e) => setEditAppointmentNotes(e.target.value)}
+                    placeholder="Ex: Seg a Sex das 08h às 11h, agendar com 48h de antecedência"
+                    className="text-xs h-8 bg-white"
+                  />
+                </div>
+              )}
+            </div>
+
             <div className="flex items-center gap-2 pt-1">
               <Button
                 type="submit"
@@ -539,6 +620,13 @@ const RecipientCard = memo(function RecipientCard({
           {recipient.address && (
             <div className="text-[11px] text-[#78716C] truncate">{recipient.address}</div>
           )}
+
+          {recipient.has_appointment_rule && recipient.appointment_notes && (
+            <div className="text-[11px] text-amber-900 bg-amber-50/80 p-2 rounded border border-amber-200 flex items-start gap-1.5 font-mono">
+              <Clock className="w-3.5 h-3.5 text-amber-700 shrink-0 mt-0.5" />
+              <span>{recipient.appointment_notes}</span>
+            </div>
+          )}
         </CardContent>
       )}
 
@@ -592,6 +680,7 @@ export function RecipientManager({
   const [isPending, startTransition] = useTransition()
   const [feedbackError, setFeedbackError] = useState<string | null>(null)
   const [filterSenderId, setFilterSenderId] = useState<string>('all')
+  const [filterAppointment, setFilterAppointment] = useState<string>('all')
   const [searchTerm, setSearchTerm] = useState('')
 
   // Edição e exclusão
@@ -607,6 +696,13 @@ export function RecipientManager({
       result = result.filter((r) => !r.sender_id)
     } else if (filterSenderId !== 'all') {
       result = result.filter((r) => r.sender_id === filterSenderId)
+    }
+
+    // Filtro por Regra de Agendamento
+    if (filterAppointment === 'with') {
+      result = result.filter((r) => r.has_appointment_rule)
+    } else if (filterAppointment === 'without') {
+      result = result.filter((r) => !r.has_appointment_rule)
     }
 
     // Busca textual
@@ -713,7 +809,7 @@ export function RecipientManager({
                 <select
                   value={filterSenderId}
                   onChange={(e) => setFilterSenderId(e.target.value)}
-                  className="text-xs bg-transparent border-none text-[#1C1917] focus:outline-none max-w-[160px]"
+                  className="text-xs bg-transparent border-none text-[#1C1917] focus:outline-none max-w-[150px]"
                 >
                   <option value="all">Todos os Remetentes</option>
                   <option value="unassigned">Sem Remetente</option>
@@ -722,6 +818,20 @@ export function RecipientManager({
                       {s.name}
                     </option>
                   ))}
+                </select>
+              </div>
+
+              {/* Filtro por Regra de Agendamento */}
+              <div className="flex items-center gap-1.5 bg-white border border-[#D6D3D1] rounded-[6px] px-2 py-1">
+                <Calendar className="w-3.5 h-3.5 text-[#78716C]" />
+                <select
+                  value={filterAppointment}
+                  onChange={(e) => setFilterAppointment(e.target.value)}
+                  className="text-xs bg-transparent border-none text-[#1C1917] focus:outline-none max-w-[150px]"
+                >
+                  <option value="all">Todos Agendamentos</option>
+                  <option value="with">Com Agendamento</option>
+                  <option value="without">Sem Agendamento</option>
                 </select>
               </div>
 

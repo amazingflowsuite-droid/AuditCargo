@@ -610,10 +610,7 @@ export function TripsDashboardTable({
                         {trip.sefaz_metadata?.is_manifest ? (
                           <div className="text-[11px] font-mono text-[#0D9488] mt-1 flex items-center gap-1">
                             <FileText className="w-3 h-3" />
-                            <span>{trip.cte_number || `Romaneio ${trip.sefaz_metadata?.plate}`}</span>
-                            <span className="text-[10px] bg-teal-50 text-teal-800 px-1 py-0.2 rounded border border-teal-200 font-semibold ml-0.5">
-                              {totalCtes} CT-es
-                            </span>
+                            <span className="font-semibold">{totalCtes} CT-es embarcados</span>
                           </div>
                         ) : trip.cte_number ? (
                           <div className="text-[11px] font-mono text-[#0D9488] mt-1 flex items-center gap-1">

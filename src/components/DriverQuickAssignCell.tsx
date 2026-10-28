@@ -362,9 +362,13 @@ export function DriverQuickAssignCell({
         </div>
       )}
 
-      {/* POPOVER / DROPDOWN DE SELEÇÃO RÁPIDA */}
+      {/* POPOVER / DROPDOWN DE SELEÇÃO RÁPIDA (Aparece acima quando pendente para melhor UX) */}
       {isOpen && (
-        <div className="absolute left-0 top-full mt-1.5 z-50 w-72 sm:w-80 bg-white rounded-lg shadow-xl border border-[#E7E5E4] overflow-hidden text-xs animate-in fade-in zoom-in-95 duration-150">
+        <div
+          className={`absolute left-0 z-50 w-72 sm:w-80 bg-white rounded-lg shadow-2xl border border-[#E7E5E4] overflow-hidden text-xs animate-in fade-in zoom-in-95 duration-150 ${
+            !currentDriverName ? 'bottom-full mb-2' : 'top-full mt-1.5'
+          }`}
+        >
           {/* Header com Campo de Busca */}
           <div className="p-2.5 border-b border-[#E7E5E4] bg-[#FAFAF9]">
             <div className="relative">

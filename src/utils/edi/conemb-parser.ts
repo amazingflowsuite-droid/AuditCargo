@@ -1,5 +1,6 @@
 import pg from 'pg'
 import crypto from 'crypto'
+import { formatCNPJ } from '@/utils/masks'
 
 export interface ParsedEdiCte {
   nCT: string
@@ -9,6 +10,7 @@ export interface ParsedEdiCte {
   placa: string
   formattedPlate: string
   issueDate?: string
+  condicaoFrete?: 'CIF' | 'FOB'
   volumes?: number
   weightKg?: number
   pesoCalculoKg?: number
@@ -22,7 +24,14 @@ export interface ParsedEdiCte {
   remCidade?: string
   remUf?: string
   remTelefone?: string
+  destNome?: string
   destCnpj?: string
+  destEndereco?: string
+  destBairro?: string
+  destCidade?: string
+  destUf?: string
+  destTelefone?: string
+  tomadorCnpj?: string
 }
 
 export interface ParsedEdiManifest {
@@ -120,6 +129,12 @@ export function parseProcedaConemb(ediText: string): ParsedEdiConemb {
       const emitCnpj = line.slice(39, 53).trim()
       const remCnpj = line.slice(53, 67).trim()
       const destCnpj = line.slice(81, 95).trim()
+      const tomadorCnpj = line.slice(95, 109).trim()
+      const condFreteRaw = line.slice(38, 39).trim()
+      const condicaoFrete: 'CIF' | 'FOB' = condFreteRaw === 'F' ? 'FOB' : 'CIF'
+      const destUf = line.length >= 337 && line.slice(335, 337).trim().length === 2
+        ? line.slice(335, 337).trim()
+        : undefined
 
       // Chave do CT-e (44 dígitos contíguos na linha)
       const chCTeMatch = line.match(/\b(\d{44})\b/)
@@ -151,8 +166,11 @@ export function parseProcedaConemb(ediText: string): ParsedEdiConemb {
         placa,
         formattedPlate: formatPlate(placa),
         issueDate,
+        condicaoFrete,
         remCnpj: remCnpj && remCnpj !== '00000000000000' ? remCnpj : undefined,
         destCnpj: destCnpj && destCnpj !== '00000000000000' ? destCnpj : undefined,
+        tomadorCnpj: tomadorCnpj && tomadorCnpj !== '00000000000000' ? tomadorCnpj : undefined,
+        destUf,
         invoices: [],
       }
     } else if (regType === '523' && currentCte) {
@@ -202,17 +220,43 @@ export function parseProcedaConemb(ediText: string): ParsedEdiConemb {
         currentCte.invoices.push(nfNum)
       }
     } else if (regType === '527' && currentCte) {
-      // Registro 527: Dados Cadastrais do Embarcador / Remetente
-      currentCte.remNome = line.slice(3, 63).trim()
-      const cnpjEmbarcador = line.slice(63, 77).trim()
-      if (cnpjEmbarcador && cnpjEmbarcador !== '00000000000000') {
-        currentCte.remCnpj = cnpjEmbarcador
+      // Registro 527: Dados Cadastrais do Embarcador / Parceiro Comercial no Intercâmbio EDI
+      const clienteNome = line.slice(3, 63).trim()
+      const cnpjEmbarcadorRaw = line.slice(63, 77).trim()
+      const cnpjEmbarcador = cnpjEmbarcadorRaw && cnpjEmbarcadorRaw !== '00000000000000' ? cnpjEmbarcadorRaw : undefined
+      const clienteEndereco = line.slice(92, 152).trim()
+      const clienteBairro = line.slice(152, 187).trim()
+      const clienteCidade = line.slice(187, 222).trim()
+      const clienteUf = line.slice(238, 244).trim()
+      const clienteTelefone = line.slice(245).trim()
+
+      // Se o CNPJ do 527 bater com o CNPJ do Remetente do CT-e (ex: frete CIF emitido pelo cliente)
+      if (cnpjEmbarcador && currentCte.remCnpj && cnpjEmbarcador === currentCte.remCnpj) {
+        currentCte.remNome = clienteNome
+        currentCte.remEndereco = clienteEndereco
+        currentCte.remBairro = clienteBairro
+        currentCte.remCidade = clienteCidade
+        currentCte.remUf = clienteUf
+        currentCte.remTelefone = clienteTelefone
+      } else if (cnpjEmbarcador && currentCte.destCnpj && cnpjEmbarcador === currentCte.destCnpj) {
+        // Se o CNPJ do 527 bater com o CNPJ do Destinatário do CT-e (ex: frete FOB onde cliente recebe)
+        currentCte.destNome = clienteNome
+        currentCte.destEndereco = clienteEndereco
+        currentCte.destBairro = clienteBairro
+        currentCte.destCidade = clienteCidade
+        currentCte.destUf = clienteUf
+        currentCte.destTelefone = clienteTelefone
+      } else {
+        // Fallback: se o remetente não tiver nome e for CIF, atribui ao remetente
+        if (!currentCte.remNome && currentCte.condicaoFrete !== 'FOB') {
+          currentCte.remNome = clienteNome
+          currentCte.remEndereco = clienteEndereco
+          currentCte.remBairro = clienteBairro
+          currentCte.remCidade = clienteCidade
+          currentCte.remUf = clienteUf
+          currentCte.remTelefone = clienteTelefone
+        }
       }
-      currentCte.remEndereco = line.slice(92, 152).trim()
-      currentCte.remBairro = line.slice(152, 187).trim()
-      currentCte.remCidade = line.slice(187, 222).trim()
-      currentCte.remUf = line.slice(238, 244).trim()
-      currentCte.remTelefone = line.slice(245).trim()
     }
   }
 
@@ -268,10 +312,49 @@ export async function processEdiLoteInDatabase(
   )
   const drivers = driversRes.rows
 
+  // Carrega destinatários cadastrados para enriquecer os dados fiscais do EDI
+  const recipientsRes = await dbClient.query(
+    `SELECT id, name, cnpj, city, address FROM recipients WHERE organization_id = $1`,
+    [orgId]
+  )
+  const existingRecipients = recipientsRes.rows
+
+  // Carrega remetentes cadastrados
+  const sendersRes = await dbClient.query(
+    `SELECT id, name, cnpj, city, address, phone FROM senders WHERE organization_id = $1`,
+    [orgId]
+  )
+  const existingSenders = sendersRes.rows
+
   // 1. Agrupamento dos CT-es por Romaneio / Veículo: Filial + Placa
   const manifestsMap = new Map<string, ParsedEdiManifest>()
 
   for (const cte of parsedEdi.ctes) {
+    // Cruzamento com destinatários cadastrados pelo CNPJ
+    if (cte.destCnpj) {
+      const cleanDestCnpj = cte.destCnpj.replace(/\D/g, '')
+      const matchedRec = existingRecipients.find(
+        (r) => (r.cnpj || '').replace(/\D/g, '') === cleanDestCnpj
+      )
+      if (matchedRec) {
+        cte.destNome = matchedRec.name
+        if (matchedRec.city) cte.destCidade = matchedRec.city
+      }
+    }
+
+    // Cruzamento com remetentes cadastrados pelo CNPJ
+    if (cte.remCnpj) {
+      const cleanRemCnpj = cte.remCnpj.replace(/\D/g, '')
+      const matchedSend = existingSenders.find(
+        (s) => (s.cnpj || '').replace(/\D/g, '') === cleanRemCnpj
+      )
+      if (matchedSend) {
+        cte.remNome = matchedSend.name
+        if (matchedSend.city) cte.remCidade = matchedSend.city
+        if (matchedSend.address) cte.remEndereco = matchedSend.address
+      }
+    }
+
     const rawPlate = cte.placa || 'SEM_PLACA'
     const filial = cte.filial || 'GRU'
     const key = `ROM-${filial}-${rawPlate}`
@@ -290,7 +373,9 @@ export async function processEdiLoteInDatabase(
         remCidade: cte.remCidade,
         remUf: cte.remUf,
         remTelefone: cte.remTelefone,
-        destCity: cte.remCidade ? `${cte.remCidade}/${cte.remUf || 'SP'}` : 'Destino',
+        destCity: cte.destCidade
+          ? `${cte.destCidade}${cte.destUf ? `/${cte.destUf}` : ''}`
+          : (cte.destUf ? `Destino ${cte.destUf}` : 'Destino'),
         destinations: [],
         totalWeightKg: 0,
         totalCalculatedWeightKg: 0,
@@ -315,8 +400,10 @@ export async function processEdiLoteInDatabase(
       if (!m.invoices.includes(inv)) m.invoices.push(inv)
     })
 
-    // Acumula destinos
-    const dest = cte.remCidade ? `${cte.remCidade}/${cte.remUf || 'SP'}` : ''
+    // Acumula destinos reais das entregas
+    const dest = cte.destCidade
+      ? `${cte.destCidade}${cte.destUf ? `/${cte.destUf}` : ''}`
+      : (cte.destUf ? `Destino/${cte.destUf}` : '')
     if (dest && !m.destinations.includes(dest)) {
       m.destinations.push(dest)
     }
@@ -388,9 +475,13 @@ export async function processEdiLoteInDatabase(
           vFrete: c.vFrete ?? null,
           invoices: c.invoices,
           remNome: c.remNome,
+          remCnpj: c.remCnpj ? formatCNPJ(c.remCnpj) : null,
           remCidade: c.remCidade,
           remUf: c.remUf,
-          destCnpj: c.destCnpj,
+          destNome: c.destNome || (c.destCnpj ? `Destinatário (${formatCNPJ(c.destCnpj)})` : 'Destinatário'),
+          destCnpj: c.destCnpj ? formatCNPJ(c.destCnpj) : null,
+          destCidade: c.destCidade,
+          destUf: c.destUf,
         })),
       }
 
@@ -426,7 +517,7 @@ export async function processEdiLoteInDatabase(
       if (manifest.remCnpj) {
         const cleanCnpj = manifest.remCnpj.replace(/\D/g, '')
         const senderRes = await dbClient.query(
-          `SELECT id FROM senders 
+          `SELECT id, name FROM senders 
            WHERE replace(replace(replace(cnpj, '.', ''), '/', ''), '-', '') = $1 
              AND organization_id = $2 LIMIT 1`,
           [cleanCnpj, orgId]
@@ -434,14 +525,17 @@ export async function processEdiLoteInDatabase(
 
         if (senderRes.rows.length > 0) {
           senderId = senderRes.rows[0].id
+          if (!manifest.remNome && senderRes.rows[0].name) {
+            manifest.remNome = senderRes.rows[0].name
+          }
         } else {
           const newSender = await dbClient.query(
             `INSERT INTO senders (name, cnpj, address, city, phone, organization_id, company_id)
              VALUES ($1, $2, $3, $4, $5, $6, $7)
              RETURNING id`,
             [
-              manifest.remNome || 'Remetente EDI',
-              manifest.remCnpj,
+              manifest.remNome || `Remetente (${formatCNPJ(cleanCnpj)})`,
+              formatCNPJ(cleanCnpj),
               manifest.remEndereco || null,
               manifest.remCidade || null,
               manifest.remTelefone || null,
@@ -455,8 +549,11 @@ export async function processEdiLoteInDatabase(
 
       // Destinatários estruturados dos CT-es
       const recipientsArray = manifest.ctes.map((c) => ({
-        name: c.destCnpj ? `Destinatário (CNPJ ${c.destCnpj})` : 'Destinatário',
-        destination: c.remCidade ? `${c.remCidade}/${c.remUf || 'SP'}` : 'Destino',
+        name: c.destNome || (c.destCnpj ? `Destinatário (${formatCNPJ(c.destCnpj)})` : 'Destinatário'),
+        cnpj: c.destCnpj ? formatCNPJ(c.destCnpj) : null,
+        destination: c.destCidade
+          ? `${c.destCidade}${c.destUf ? `/${c.destUf}` : ''}`
+          : (c.destUf ? `Estado ${c.destUf}` : 'Destino'),
         invoices: c.invoices.join(', '),
         cteNumber: c.nCT,
       }))
