@@ -6,6 +6,7 @@ import { getDbPool } from '@/utils/db'
 import { parseCTeXml } from '@/utils/sefaz/sync-service'
 import { ParsedCTeData } from '@/utils/sefaz/types'
 import { parseProcedaConemb, processEdiLoteInDatabase } from '@/utils/edi/conemb-parser'
+import { appendTripAuditEvent } from '@/utils/trip-audit'
 
 export interface EmailSyncDetail {
   subject: string
@@ -324,22 +325,31 @@ async function processCteTripInDatabase(
       [cteData.chCTe, cteData.nCT, orgId]
     )
 
-    const sefazMetadata = {
-      weight_kg: cteData.weightKg ?? null,
-      cargo_value: cteData.cargoValue ?? null,
-      cargo_type: cteData.cargoType ?? null,
-      freight_value: cteData.vFrete ?? null,
-      rntrc: cteData.rntrc ?? null,
-      observations: cteData.observations ?? null,
-      plate: cteData.placa ?? null,
-      emitter_cnpj: cteData.emitCnpj ?? null,
-      emitter_name: cteData.emitNome ?? null,
-      issue_date: cteData.dhEmi ?? null,
-      serie: cteData.serie ?? null,
-      origin_city: `${cteData.remCidade}/${cteData.remUf}`,
-      destination_city: destCity,
-      source: 'email_ssw',
-    }
+    const sefazMetadata = appendTripAuditEvent(
+      {
+        weight_kg: cteData.weightKg ?? null,
+        cargo_value: cteData.cargoValue ?? null,
+        cargo_type: cteData.cargoType ?? null,
+        freight_value: cteData.vFrete ?? null,
+        rntrc: cteData.rntrc ?? null,
+        observations: cteData.observations ?? null,
+        plate: cteData.placa ?? null,
+        emitter_cnpj: cteData.emitCnpj ?? null,
+        emitter_name: cteData.emitNome ?? null,
+        issue_date: cteData.dhEmi ?? null,
+        serie: cteData.serie ?? null,
+        origin_city: `${cteData.remCidade}/${cteData.remUf}`,
+        destination_city: destCity,
+        source: 'email_ssw',
+      },
+      {
+        type: 'CREATED',
+        title: `Viagem importada via XML de CT-e (${cteData.nCT})`,
+        description: `XML do CT-e ${cteData.nCT} recebido via e-mail SSW. Origem: ${cteData.remNome} -> Destino: ${destDesc} (${destCity}).`,
+        channel: 'email_ssw',
+        actor: 'Sincronizador E-mail SSW',
+      }
+    )
 
     if (existingTrip.rows.length > 0) {
       // Atualiza metadados fiscais caso estejam vazios

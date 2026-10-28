@@ -29,15 +29,20 @@ export default async function EstadiasPage() {
     .from('trips')
     .select(`
       id,
+      token,
       cte_number,
+      cte_key,
       invoices,
       destination,
       arrival_time,
       completion_time,
+      created_at,
+      checkin_photo_url,
+      sefaz_metadata,
       sender,
       organization_id,
-      drivers(name),
-      senders(name, franchise_hours, demurrage_hourly_rate)
+      drivers(name, phone, default_plate),
+      senders(name, cnpj, franchise_hours, demurrage_hourly_rate)
     `)
     .not('arrival_time', 'is', null)
     .not('completion_time', 'is', null)

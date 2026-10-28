@@ -1,6 +1,7 @@
 import pg from 'pg'
 import crypto from 'crypto'
 import { formatCNPJ } from '@/utils/masks'
+import { appendTripAuditEvent, parseSafeMetadata } from '@/utils/trip-audit'
 
 export interface ParsedEdiCte {
   nCT: string
@@ -610,6 +611,23 @@ export async function processEdiLoteInDatabase(
       }))
 
       if (existingRes.rows.length > 0) {
+        const oldMeta = parseSafeMetadata(existingRes.rows[0].sefaz_metadata)
+        let mergedMeta: Record<string, any> = {
+          ...sefazMetadata,
+          audit_logs: Array.isArray(oldMeta.audit_logs) ? oldMeta.audit_logs : [],
+          incidents: Array.isArray(oldMeta.incidents) ? oldMeta.incidents : [],
+          has_open_incident: Boolean(oldMeta.has_open_incident),
+          pending_telegram_incident_id: oldMeta.pending_telegram_incident_id,
+        }
+        mergedMeta = appendTripAuditEvent(mergedMeta, {
+          type: 'TRIP_UPDATED',
+          title: 'Romaneio SSW Sincronizado / Atualizado via EDI',
+          description: `Dados fiscais atualizados (${manifest.ctes.length} CT-es, ${manifest.invoices.length} NFs).`,
+          channel: 'edi_ssw',
+          actorName: 'Robô EDI SSW',
+          metadata: { plate: manifest.formattedPlate || manifest.plate },
+        })
+
         await dbClient.query(
           `UPDATE trips 
            SET sefaz_metadata = $1,
@@ -620,7 +638,7 @@ export async function processEdiLoteInDatabase(
                driver_id = COALESCE(driver_id, $6)
            WHERE id = $7`,
           [
-            JSON.stringify(sefazMetadata),
+            JSON.stringify(mergedMeta),
             manifest.invoices,
             destCitySummary,
             JSON.stringify(recipientsArray),
@@ -677,6 +695,26 @@ export async function processEdiLoteInDatabase(
 
       const tripToken = crypto.randomBytes(4).toString('hex').toUpperCase()
 
+      let initialMeta = appendTripAuditEvent(sefazMetadata, {
+        type: 'CREATED',
+        title: 'Romaneio Importado via EDI SSW (CONEMB)',
+        description: `${manifest.manifestNumber} importado com ${manifest.ctes.length} CT-e(s) e ${manifest.invoices.length} NF(s) para ${destCitySummary}.`,
+        channel: 'edi_ssw',
+        actorName: 'Importação EDI SSW',
+        metadata: { plate: manifest.formattedPlate || manifest.plate },
+      })
+
+      if (matchedDriverId && matchedDriverName) {
+        initialMeta = appendTripAuditEvent(initialMeta, {
+          type: 'DRIVER_ASSIGNED',
+          title: `Motorista Vinculado Automaticamente: ${matchedDriverName}`,
+          description: `Cruzamento automático pela placa ${manifest.formattedPlate || manifest.plate}.`,
+          channel: 'edi_ssw',
+          actorName: 'Sistema AuditCargo',
+          metadata: { plate: manifest.formattedPlate || manifest.plate },
+        })
+      }
+
       // Insere o Romaneio como uma Viagem única
       await dbClient.query(
         `INSERT INTO trips (
@@ -707,7 +745,7 @@ export async function processEdiLoteInDatabase(
           senderId,
           JSON.stringify(recipientsArray),
           orgId,
-          JSON.stringify(sefazMetadata),
+          JSON.stringify(initialMeta),
         ]
       )
 

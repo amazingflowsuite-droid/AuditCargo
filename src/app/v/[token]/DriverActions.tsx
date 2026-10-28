@@ -1,7 +1,20 @@
 'use client'
 
 import { useState, useTransition, useRef, useEffect } from 'react'
-import { registerCheckin, registerCheckout, revertCheckin, revertCheckout } from "@/app/actions"
+import {
+  registerCheckin,
+  registerCheckout,
+  revertCheckin,
+  revertCheckout,
+  reportTripIncidentAction,
+} from "@/app/actions"
+import {
+  INCIDENT_CATEGORIES,
+  IncidentCategory,
+  getTripIncidents,
+  getCompleteTripTimeline,
+  AUDIT_CHANNEL_LABELS,
+} from "@/utils/trip-audit"
 import {
   MapPin,
   CheckCircle2,
@@ -10,11 +23,14 @@ import {
   RotateCcw,
   AlertTriangle,
   Camera,
-  Image as ImageIcon,
   X,
   Eye,
   Mail,
   Loader2,
+  Send,
+  History,
+  ChevronDown,
+  ChevronUp,
 } from "lucide-react"
 
 /**
@@ -22,7 +38,6 @@ import {
  * Transforma fotos mobile de 8-15MB em arquivos de ~200-300KB antes do upload.
  */
 async function compressImageFile(file: File): Promise<File> {
-  // Se já for menor que 300KB, dispensa compressão
   if (file.size <= 300 * 1024) return file
 
   return new Promise((resolve) => {
@@ -86,14 +101,20 @@ export function DriverActions({
   token,
   arrivalTime,
   completionTime,
+  createdAt,
   checkinPhotoUrl,
+  sefazMetadata,
+  driverName,
 }: {
   tripId: string
   status: string
   token: string
   arrivalTime?: string | null
   completionTime?: string | null
+  createdAt?: string | null
   checkinPhotoUrl?: string | null
+  sefazMetadata?: any
+  driverName?: string
 }) {
   const [isPending, startTransition] = useTransition()
   const [geoStatus, setGeoStatus] = useState<string>('')
@@ -102,27 +123,39 @@ export function DriverActions({
   const [actionError, setActionError] = useState<string | null>(null)
   const [isCompressing, setIsCompressing] = useState(false)
 
-  // Foto comprobatória
+  // Foto comprobatória de portaria
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [previewUrl, setPreviewUrl] = useState<string | null>(null)
   const [viewingPhoto, setViewingPhoto] = useState<string | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  // Prevenção de vazamento de memória (Memory Leak) ao desmontar componente
+  // Estados de Registro de Imprevisto / Sinistro
+  const [localMeta, setLocalMeta] = useState<any>(sefazMetadata)
+  const [showIncidentForm, setShowIncidentForm] = useState(false)
+  const [incidentCategory, setIncidentCategory] = useState<IncidentCategory>('nf_fiscal')
+  const [incidentDescription, setIncidentDescription] = useState('')
+  const [incidentFile, setIncidentFile] = useState<File | null>(null)
+  const [incidentPreviewUrl, setIncidentPreviewUrl] = useState<string | null>(null)
+  const [isIncidentSubmitting, setIsIncidentSubmitting] = useState(false)
+  const [incidentSuccessMsg, setIncidentSuccessMsg] = useState<string | null>(null)
+  const [showTimeline, setShowTimeline] = useState(false)
+  const incidentFileInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    setLocalMeta(sefazMetadata)
+  }, [sefazMetadata])
+
   useEffect(() => {
     return () => {
-      if (previewUrl) {
-        URL.revokeObjectURL(previewUrl)
-      }
+      if (previewUrl) URL.revokeObjectURL(previewUrl)
+      if (incidentPreviewUrl) URL.revokeObjectURL(incidentPreviewUrl)
     }
-  }, [previewUrl])
+  }, [previewUrl, incidentPreviewUrl])
 
   const handlePhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (file) {
-      if (previewUrl) {
-        URL.revokeObjectURL(previewUrl)
-      }
+      if (previewUrl) URL.revokeObjectURL(previewUrl)
       setActionError(null)
       setIsCompressing(true)
       try {
@@ -130,7 +163,7 @@ export function DriverActions({
         setSelectedFile(optimized)
         const url = URL.createObjectURL(optimized)
         setPreviewUrl(url)
-      } catch (err) {
+      } catch {
         setSelectedFile(file)
         const url = URL.createObjectURL(file)
         setPreviewUrl(url)
@@ -151,6 +184,85 @@ export function DriverActions({
     }
   }
 
+  const handleIncidentPhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (file) {
+      if (incidentPreviewUrl) URL.revokeObjectURL(incidentPreviewUrl)
+      setActionError(null)
+      setIsCompressing(true)
+      try {
+        const optimized = await compressImageFile(file)
+        setIncidentFile(optimized)
+        setIncidentPreviewUrl(URL.createObjectURL(optimized))
+      } catch {
+        setIncidentFile(file)
+        setIncidentPreviewUrl(URL.createObjectURL(file))
+      } finally {
+        setIsCompressing(false)
+      }
+    }
+  }
+
+  const removeIncidentPhoto = () => {
+    setIncidentFile(null)
+    if (incidentPreviewUrl) {
+      URL.revokeObjectURL(incidentPreviewUrl)
+      setIncidentPreviewUrl(null)
+    }
+    if (incidentFileInputRef.current) {
+      incidentFileInputRef.current.value = ''
+    }
+  }
+
+  const handleReportIncident = () => {
+    if (!incidentDescription.trim() || incidentDescription.trim().length < 3) {
+      setActionError('Descreva o que aconteceu (ex: número da nota com problema ou motivo da recusa).')
+      return
+    }
+
+    setActionError(null)
+    setIncidentSuccessMsg(null)
+    setIsIncidentSubmitting(true)
+
+    const submitWithCoords = async (lat?: number, lng?: number) => {
+      try {
+        const formData = new FormData()
+        formData.append('category', incidentCategory)
+        formData.append('description', incidentDescription.trim())
+        if (lat) formData.append('lat', String(lat))
+        if (lng) formData.append('lng', String(lng))
+        if (incidentFile) formData.append('photo', incidentFile)
+
+        const res = await reportTripIncidentAction(tripId, formData)
+        if (res?.error) {
+          setActionError(res.error)
+          return
+        }
+        if (res?.sefaz_metadata) {
+          setLocalMeta(res.sefaz_metadata)
+        }
+        setIncidentDescription('')
+        removeIncidentPhoto()
+        setShowIncidentForm(false)
+        setIncidentSuccessMsg('Imprevisto registrado! A central de logística já foi alertada.')
+      } catch (err: any) {
+        setActionError(err?.message || 'Erro ao enviar relato de imprevisto.')
+      } finally {
+        setIsIncidentSubmitting(false)
+      }
+    }
+
+    if (navigator.geolocation) {
+      navigator.geolocation.getCurrentPosition(
+        (pos) => submitWithCoords(pos.coords.latitude, pos.coords.longitude),
+        () => submitWithCoords(),
+        { enableHighAccuracy: true, timeout: 4000, maximumAge: 30000 }
+      )
+    } else {
+      submitWithCoords()
+    }
+  }
+
   const handleCheckin = () => {
     setActionError(null)
     setGeoStatus('Capturando GPS do local...')
@@ -167,6 +279,9 @@ export function DriverActions({
         if (res?.error) {
           setActionError(res.error)
           return
+        }
+        if (res?.data?.sefaz_metadata) {
+          setLocalMeta(res.data.sefaz_metadata)
         }
         if (res?.emailSent) {
           setEmailStatusMsg('E-mail oficial de aviso de chegada disparado para o destinatário!')
@@ -199,6 +314,9 @@ export function DriverActions({
         setActionError(res.error)
         return
       }
+      if (res?.data?.sefaz_metadata) {
+        setLocalMeta(res.data.sefaz_metadata)
+      }
       if (res?.emailSent) {
         setEmailStatusMsg('E-mail oficial de saída e finalização disparado para o destinatário!')
       }
@@ -214,6 +332,9 @@ export function DriverActions({
         setShowRevertConfirm(false)
         return
       }
+      if (res?.data?.sefaz_metadata) {
+        setLocalMeta(res.data.sefaz_metadata)
+      }
       setShowRevertConfirm(false)
       removePhoto()
     })
@@ -228,11 +349,13 @@ export function DriverActions({
         setShowRevertConfirm(false)
         return
       }
+      if (res?.data?.sefaz_metadata) {
+        setLocalMeta(res.data.sefaz_metadata)
+      }
       setShowRevertConfirm(false)
     })
   }
 
-  // Janela de segurança de 15 minutos para reversão
   const canRevertArrival = () => {
     if (!arrivalTime) return true
     const elapsedMinutes = (Date.now() - new Date(arrivalTime).getTime()) / (1000 * 60)
@@ -245,11 +368,319 @@ export function DriverActions({
     return elapsedMinutes <= 15
   }
 
-  // 1. Em Trânsito -> Foto da Portaria + Botão "Chegada no Destino"
+  const incidents = getTripIncidents(localMeta)
+  const openIncidentsCount = incidents.filter((i) => i.status === 'open').length
+  const timelineEvents = getCompleteTripTimeline({
+    created_at: createdAt,
+    arrival_time: arrivalTime,
+    completion_time: completionTime,
+    checkin_photo_url: checkinPhotoUrl,
+    sefaz_metadata: localMeta,
+    drivers: { name: driverName },
+  })
+
+  const renderIncidentAndTimelineSection = () => (
+    <div className="space-y-3 pt-2 border-t border-[#E7E5E4]">
+      {/* Mensagem de sucesso ao reportar imprevisto */}
+      {incidentSuccessMsg && (
+        <div className="p-3 rounded-[6px] bg-amber-50 border border-amber-300 text-amber-900 text-xs flex items-start justify-between gap-2">
+          <div className="flex items-start gap-2">
+            <CheckCircle2 className="w-4 h-4 text-amber-700 shrink-0 mt-0.5" />
+            <span className="font-medium">{incidentSuccessMsg}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIncidentSuccessMsg(null)}
+            className="text-amber-700 hover:text-amber-950"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* Botão para Reportar Imprevisto / Sinistro (disponível em trânsito ou na portaria) */}
+      {status !== 'finished' && (
+        <div className="rounded-[8px] border border-amber-300 bg-amber-50/60 overflow-hidden shadow-2xs">
+          {!showIncidentForm ? (
+            <button
+              type="button"
+              onClick={() => {
+                setShowIncidentForm(true)
+                setActionError(null)
+              }}
+              className="w-full p-3.5 flex items-center justify-between text-left hover:bg-amber-100/60 transition-colors"
+            >
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-full bg-amber-500 text-white flex items-center justify-center shrink-0">
+                  <AlertTriangle className="w-4 h-4" />
+                </div>
+                <div>
+                  <span className="text-xs font-bold text-amber-950 block">
+                    Reportar Imprevisto ou Problema na Descarga
+                  </span>
+                  <span className="text-[11px] text-amber-800 block">
+                    Nota vencida, recusa de carga, fila grande ou avaria
+                  </span>
+                </div>
+              </div>
+              <span className="text-xs font-bold text-amber-800 bg-white px-2.5 py-1 rounded-[4px] border border-amber-300">
+                Registrar
+              </span>
+            </button>
+          ) : (
+            <div className="p-4 space-y-3 bg-white">
+              <div className="flex items-center justify-between border-b border-stone-200 pb-2.5">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-4 h-4 text-amber-600" />
+                  <h4 className="text-xs font-bold text-[#1C1917] uppercase tracking-wider">
+                    Registrar Imprevisto Operacional
+                  </h4>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowIncidentForm(false)}
+                  className="text-stone-400 hover:text-stone-700 p-1"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-semibold text-[#57534E] block">
+                  1. Qual o motivo do imprevisto?
+                </label>
+                <div className="grid grid-cols-1 gap-1.5">
+                  {(Object.keys(INCIDENT_CATEGORIES) as IncidentCategory[]).map((catKey) => {
+                    const cat = INCIDENT_CATEGORIES[catKey]
+                    const isSelected = incidentCategory === catKey
+                    return (
+                      <button
+                        key={catKey}
+                        type="button"
+                        onClick={() => setIncidentCategory(catKey)}
+                        className={`p-2.5 rounded-[6px] border text-left text-xs font-medium flex items-center justify-between transition-all ${
+                          isSelected
+                            ? 'bg-amber-50 border-amber-500 text-amber-950 ring-1 ring-amber-500 font-semibold'
+                            : 'bg-[#FAFAF9] border-[#E7E5E4] text-[#44403C] hover:bg-stone-100'
+                        }`}
+                      >
+                        <span>
+                          {cat.icon} {cat.label}
+                        </span>
+                        {isSelected && <CheckCircle2 className="w-4 h-4 text-amber-600 shrink-0" />}
+                      </button>
+                    )
+                  })}
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-semibold text-[#57534E] block">
+                  2. Explique o que aconteceu:
+                </label>
+                <textarea
+                  rows={3}
+                  value={incidentDescription}
+                  onChange={(e) => setIncidentDescription(e.target.value)}
+                  placeholder="Ex: A portaria recusou a Nota Fiscal 4512 por prazo vencido, aguardando liberação..."
+                  className="w-full rounded-[6px] border border-[#D6D3D1] p-2.5 text-xs text-[#1C1917] focus:outline-none focus:border-amber-600"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label className="text-[11px] font-semibold text-[#57534E] block">
+                  3. Foto do problema / nota fiscal (Opcional):
+                </label>
+                <input
+                  type="file"
+                  accept="image/*"
+                  capture="environment"
+                  ref={incidentFileInputRef}
+                  onChange={handleIncidentPhotoSelect}
+                  className="hidden"
+                />
+                {!incidentPreviewUrl ? (
+                  <button
+                    type="button"
+                    onClick={() => incidentFileInputRef.current?.click()}
+                    className="w-full py-2.5 px-3 border border-dashed border-[#D6D3D1] hover:border-amber-600 rounded-[6px] bg-[#FAFAF9] text-xs font-medium text-[#57534E] flex items-center justify-center gap-2"
+                  >
+                    <Camera className="w-4 h-4 text-amber-600" />
+                    <span>Anexar Foto da Nota ou Ocorrência</span>
+                  </button>
+                ) : (
+                  <div className="p-2 rounded-[6px] bg-amber-50/50 border border-amber-200 flex items-center gap-2.5">
+                    <img
+                      src={incidentPreviewUrl}
+                      alt="Foto do Imprevisto"
+                      className="w-12 h-12 object-cover rounded-[4px] border border-amber-300"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <span className="text-[11px] font-semibold text-amber-900 block">
+                        Foto anexada ao chamado
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => incidentFileInputRef.current?.click()}
+                        className="text-[10px] text-amber-700 underline"
+                      >
+                        Trocar foto
+                      </button>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={removeIncidentPhoto}
+                      className="p-1 text-stone-400 hover:text-red-600"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={handleReportIncident}
+                  disabled={isIncidentSubmitting || isCompressing}
+                  className="flex-1 py-3 px-4 rounded-[6px] bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold flex items-center justify-center gap-2 shadow-xs disabled:opacity-50"
+                >
+                  {isIncidentSubmitting ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Send className="w-4 h-4" />
+                  )}
+                  <span>{isIncidentSubmitting ? 'Enviando Alerta...' : 'Enviar Imprevisto para Central'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowIncidentForm(false)}
+                  className="py-3 px-3 rounded-[6px] border border-[#D6D3D1] text-xs font-medium text-[#57534E] hover:bg-stone-100"
+                >
+                  Cancelar
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Lista de Imprevistos Registrados nesta Viagem */}
+      {incidents.length > 0 && (
+        <div className="p-3.5 rounded-[8px] bg-white border border-amber-300 space-y-2.5 shadow-2xs">
+          <div className="flex items-center justify-between">
+            <span className="text-xs font-bold text-[#1C1917] flex items-center gap-1.5">
+              <AlertTriangle className="w-4 h-4 text-amber-600" />
+              Ocorrências / Imprevistos ({incidents.length})
+            </span>
+            {openIncidentsCount > 0 ? (
+              <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 border border-amber-300">
+                {openIncidentsCount} em análise
+              </span>
+            ) : (
+              <span className="text-[10px] font-mono font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
+                Tratados
+              </span>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            {incidents.map((inc) => (
+              <div
+                key={inc.id}
+                className={`p-2.5 rounded-[6px] border text-xs space-y-1.5 ${
+                  inc.status === 'resolved'
+                    ? 'bg-stone-50 border-stone-200'
+                    : 'bg-amber-50/50 border-amber-200'
+                }`}
+              >
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-bold text-[#1C1917]">
+                    {INCIDENT_CATEGORIES[inc.category]?.icon || '⚠️'} {inc.categoryLabel}
+                  </span>
+                  <span
+                    className={`text-[10px] font-mono px-1.5 py-0.5 rounded-[4px] font-semibold ${
+                      inc.status === 'resolved'
+                        ? 'bg-emerald-100 text-emerald-800'
+                        : 'bg-amber-200/80 text-amber-900'
+                    }`}
+                  >
+                    {inc.status === 'resolved' ? '✅ Resolvido' : '⏳ Em Análise'}
+                  </span>
+                </div>
+                <p className="text-[#44403C] leading-snug">{inc.description}</p>
+                {inc.resolutionNotes && (
+                  <p className="text-[11px] text-emerald-800 bg-emerald-50 p-1.5 rounded-[4px] border border-emerald-200">
+                    <strong>Retorno da Central:</strong> {inc.resolutionNotes}
+                  </p>
+                )}
+                <div className="flex items-center justify-between text-[10px] text-[#78716C] font-mono pt-0.5">
+                  <span>
+                    {new Date(inc.createdAt).toLocaleDateString('pt-BR')} às{' '}
+                    {new Date(inc.createdAt).toLocaleTimeString('pt-BR', {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </span>
+                  {inc.photoUrl && (
+                    <button
+                      type="button"
+                      onClick={() => setViewingPhoto(inc.photoUrl!)}
+                      className="text-[#0D9488] font-semibold hover:underline flex items-center gap-1"
+                    >
+                      <Eye className="w-3 h-3" /> Ver foto
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Histórico e Rastreabilidade para o Motorista */}
+      <div className="rounded-[8px] bg-white border border-[#E7E5E4] overflow-hidden">
+        <button
+          type="button"
+          onClick={() => setShowTimeline(!showTimeline)}
+          className="w-full p-3 flex items-center justify-between text-xs font-semibold text-[#57534E] hover:bg-stone-50 transition-colors"
+        >
+          <span className="flex items-center gap-2">
+            <History className="w-4 h-4 text-[#0D9488]" />
+            <span>Histórico de Rastreabilidade ({timelineEvents.length} eventos)</span>
+          </span>
+          {showTimeline ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+        </button>
+
+        {showTimeline && (
+          <div className="p-3 pt-1 border-t border-[#E7E5E4] space-y-2.5 bg-[#FAFAF9]">
+            {timelineEvents.map((ev) => (
+              <div key={ev.id} className="flex items-start gap-2.5 text-xs border-l-2 border-[#0D9488] pl-2.5 py-0.5">
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-bold text-[#1C1917]">{ev.title}</span>
+                    <span className="text-[10px] font-mono text-[#78716C] shrink-0">
+                      {new Date(ev.timestamp).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}{' '}
+                      {new Date(ev.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  </div>
+                  {ev.description && <p className="text-[11px] text-[#57534E] mt-0.5">{ev.description}</p>}
+                  <span className="text-[10px] font-mono text-[#78716C]">
+                    Canal: {AUDIT_CHANNEL_LABELS[ev.channel]?.label || ev.channel}
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+
+  // 1. Em Trânsito -> Foto da Portaria + Botão "Chegada no Destino" + Imprevisto
   if (status === 'in_transit' || status === 'pending') {
     return (
       <div className="space-y-4 pt-2">
-        {/* Alerta de Erro */}
         {actionError && (
           <div className="p-3 bg-red-50 text-red-700 text-xs rounded-[6px] border border-red-200 flex items-start gap-2">
             <AlertTriangle className="w-4 h-4 shrink-0 text-red-600 mt-0.5" />
@@ -353,15 +784,32 @@ export function DriverActions({
         <p className="text-[11px] text-center text-[#78716C] leading-relaxed">
           🔒 Ao confirmar a chegada, gravamos coordenadas de GPS, foto e enviamos aviso oficial por e-mail para o destinatário cadastrado (Lei 11.442/07).
         </p>
+
+        {renderIncidentAndTimelineSection()}
+
+        {viewingPhoto && (
+          <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 backdrop-blur-xs">
+            <div className="bg-white rounded-[8px] max-w-sm w-full overflow-hidden shadow-floating">
+              <div className="p-3 bg-[#0F172A] text-white flex items-center justify-between">
+                <span className="text-xs font-semibold">Evidência Fotográfica</span>
+                <button onClick={() => setViewingPhoto(null)} className="text-gray-300 hover:text-white">
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="p-2">
+                <img src={viewingPhoto} alt="Comprovante" className="w-full rounded-[4px] max-h-[70vh] object-contain" />
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     )
   }
 
-  // 2. Chegou no Destino -> Foto registrada + Botão Finalizar Descarga + Opção de Desfazer
+  // 2. Chegou no Destino -> Foto registrada + Botão Finalizar Descarga + Imprevisto + Opção de Desfazer
   if (status === 'arrived' || status === 'unloading') {
     return (
       <div className="space-y-4 pt-2">
-        {/* Alerta de Erro */}
         {actionError && (
           <div className="p-3 bg-red-50 text-red-700 text-xs rounded-[6px] border border-red-200 flex items-start gap-2">
             <AlertTriangle className="w-4 h-4 shrink-0 text-red-600 mt-0.5" />
@@ -379,7 +827,6 @@ export function DriverActions({
             </p>
           )}
 
-          {/* Confirmação do Envio do E-mail */}
           <div className="pt-1">
             <div className="p-2 rounded-[6px] bg-white/90 border border-[#99F6E4] text-[11px] text-[#0F766E] flex items-center justify-center gap-1.5 shadow-2xs">
               <Mail className="w-3.5 h-3.5 text-[#0D9488] shrink-0" />
@@ -389,7 +836,6 @@ export function DriverActions({
             </div>
           </div>
 
-          {/* Miniatura da foto se houver */}
           {checkinPhotoUrl && (
             <div className="pt-2">
               <button
@@ -421,6 +867,9 @@ export function DriverActions({
           )}
           <span>{isPending ? 'Gravando Finalização...' : 'Finalização da Descarga'}</span>
         </button>
+
+        {/* Seção de Imprevisto e Linha do Tempo */}
+        {renderIncidentAndTimelineSection()}
 
         {/* Botão para Reverter Ação (Janela de 15 minutos) */}
         {canRevertArrival() ? (
@@ -465,12 +914,11 @@ export function DriverActions({
           </p>
         )}
 
-        {/* Modal de visualização da foto */}
         {viewingPhoto && (
           <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 backdrop-blur-xs">
             <div className="bg-white rounded-[8px] max-w-sm w-full overflow-hidden shadow-floating">
               <div className="p-3 bg-[#0F172A] text-white flex items-center justify-between">
-                <span className="text-xs font-semibold">Comprovante de Portaria</span>
+                <span className="text-xs font-semibold">Evidência Fotográfica</span>
                 <button onClick={() => setViewingPhoto(null)} className="text-gray-300 hover:text-white">
                   <X className="w-4 h-4" />
                 </button>
@@ -488,7 +936,6 @@ export function DriverActions({
   // 3. Finalizado
   return (
     <div className="space-y-4 pt-2">
-      {/* Alerta de Erro */}
       {actionError && (
         <div className="p-3 bg-red-50 text-red-700 text-xs rounded-[6px] border border-red-200 flex items-start gap-2">
           <AlertTriangle className="w-4 h-4 shrink-0 text-red-600 mt-0.5" />
@@ -508,7 +955,6 @@ export function DriverActions({
             </p>
           )}
 
-          {/* Confirmação do Envio do E-mail de Saída */}
           <div className="pt-2">
             <div className="p-2 rounded-[6px] bg-white border border-[#A7F3D0] text-[11px] text-[#065F46] flex items-center justify-center gap-1.5 shadow-2xs">
               <Mail className="w-3.5 h-3.5 text-[#059669] shrink-0" />
@@ -533,7 +979,8 @@ export function DriverActions({
         </div>
       </div>
 
-      {/* Opção de Desfazer Finalização (Janela de 15 minutos) */}
+      {renderIncidentAndTimelineSection()}
+
       {canRevertCompletion() ? (
         !showRevertConfirm ? (
           <div className="text-center">
@@ -576,12 +1023,11 @@ export function DriverActions({
         </p>
       )}
 
-      {/* Modal de visualização da foto */}
       {viewingPhoto && (
         <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4 backdrop-blur-xs">
           <div className="bg-white rounded-[8px] max-w-sm w-full overflow-hidden shadow-floating">
             <div className="p-3 bg-[#0F172A] text-white flex items-center justify-between">
-              <span className="text-xs font-semibold">Comprovante de Portaria</span>
+              <span className="text-xs font-semibold">Evidência Fotográfica</span>
               <button onClick={() => setViewingPhoto(null)} className="text-gray-300 hover:text-white">
                 <X className="w-4 h-4" />
               </button>

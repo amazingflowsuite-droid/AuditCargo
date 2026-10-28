@@ -27,9 +27,12 @@ import {
   ExternalLink,
   Send,
   Eye,
+  History,
+  AlertTriangle,
 } from 'lucide-react'
 import { CteDetailsModal } from './CteDetailsModal'
 import { DriverQuickAssignCell } from './DriverQuickAssignCell'
+import { getTripIncidents, INCIDENT_CATEGORIES } from '@/utils/trip-audit'
 import {
   updateTrip,
   cancelTrip,
@@ -70,7 +73,7 @@ interface TripsDashboardTableProps {
   userRole?: 'admin' | 'operator'
 }
 
-type FilterTab = 'open' | 'finished' | 'cancelled' | 'all'
+type FilterTab = 'open' | 'incidents' | 'finished' | 'cancelled' | 'all'
 
 export function TripsDashboardTable({
   trips: initialTrips,
@@ -141,6 +144,16 @@ export function TripsDashboardTable({
   } | null>(null)
   const [telegramCopied, setTelegramCopied] = useState(false)
   const [detailsModalTrip, setDetailsModalTrip] = useState<any | null>(null)
+  const [detailsModalTab, setDetailsModalTab] = useState<'details' | 'timeline'>('details')
+
+  const handleTripMetadataUpdated = (tripId: string, newMetadata: any) => {
+    setTrips((prev) =>
+      prev.map((t) => (t.id === tripId ? { ...t, sefaz_metadata: newMetadata } : t))
+    )
+    setDetailsModalTrip((prev: any) =>
+      prev && prev.id === tripId ? { ...prev, sefaz_metadata: newMetadata } : prev
+    )
+  }
 
   const handleSendTelegramPrompt = async (trip: any) => {
     const isLinked = Boolean(trip.telegram_chat_id || trip.drivers?.telegram_chat_id)
@@ -209,6 +222,13 @@ export function TripsDashboardTable({
     return trips.filter((t) => t.status !== 'finished' && t.status !== 'cancelled').length
   }, [trips])
 
+  const openIncidentsTripsCount = useMemo(() => {
+    return trips.filter((t) => {
+      const incs = getTripIncidents(t.sefaz_metadata)
+      return incs.some((i) => i.status === 'open')
+    }).length
+  }, [trips])
+
   const finishedTripsCount = useMemo(() => {
     return trips.filter((t) => t.status === 'finished').length
   }, [trips])
@@ -221,6 +241,10 @@ export function TripsDashboardTable({
     return trips.filter((trip) => {
       // Filtro de Status
       if (activeTab === 'open' && (trip.status === 'finished' || trip.status === 'cancelled')) return false
+      if (activeTab === 'incidents') {
+        const incs = getTripIncidents(trip.sefaz_metadata)
+        if (!incs.some((i) => i.status === 'open')) return false
+      }
       if (activeTab === 'finished' && trip.status !== 'finished') return false
       if (activeTab === 'cancelled' && trip.status !== 'cancelled') return false
 
@@ -397,6 +421,30 @@ export function TripsDashboardTable({
               }`}
             >
               {openTripsCount}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('incidents')}
+            className={`flex items-center gap-2 px-3 py-1.5 rounded-[6px] transition-all font-mono whitespace-nowrap ${
+              activeTab === 'incidents'
+                ? 'bg-white text-amber-800 font-bold shadow-sm border border-amber-300'
+                : openIncidentsTripsCount > 0
+                ? 'text-amber-800 hover:text-amber-950 font-semibold'
+                : 'text-[#78716C] hover:text-[#1C1917]'
+            }`}
+          >
+            <AlertTriangle className={`w-3.5 h-3.5 ${openIncidentsTripsCount > 0 ? 'text-amber-600' : 'text-[#A8A29E]'}`} />
+            <span>Com Imprevisto</span>
+            <span
+              className={`px-1.5 py-0.2 rounded-full text-[10px] ${
+                activeTab === 'incidents' || openIncidentsTripsCount > 0
+                  ? 'bg-amber-200 text-amber-900 font-bold'
+                  : 'bg-[#E7E5E4] text-[#57534E]'
+              }`}
+            >
+              {openIncidentsTripsCount}
             </span>
           </button>
 
@@ -737,24 +785,85 @@ export function TripsDashboardTable({
                       </td>
 
                       <td className="px-4 py-4">
-                        <span
-                          className={`inline-flex items-center px-2 py-0.5 rounded-[4px] text-xs font-medium border ${statusBadge.color}`}
-                        >
-                          {statusBadge.label}
-                        </span>
+                        <div className="flex flex-col items-start gap-1.5">
+                          <span
+                            className={`inline-flex items-center px-2 py-0.5 rounded-[4px] text-xs font-medium border ${statusBadge.color}`}
+                          >
+                            {statusBadge.label}
+                          </span>
+                          {(() => {
+                            const tripIncidents = getTripIncidents(trip.sefaz_metadata)
+                            const openIncs = tripIncidents.filter((i) => i.status === 'open')
+                            if (openIncs.length > 0) {
+                              const latest = openIncs[openIncs.length - 1]
+                              const catShort = INCIDENT_CATEGORIES[latest.category]?.shortLabel || 'Imprevisto'
+                              return (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setDetailsModalTab('timeline')
+                                    setDetailsModalTrip(trip)
+                                  }}
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-[4px] text-[10px] font-mono font-bold bg-amber-100 text-amber-950 border border-amber-400 hover:bg-amber-200 transition-colors cursor-pointer"
+                                  title={`${latest.categoryLabel}: ${latest.description}`}
+                                >
+                                  <AlertTriangle className="w-3 h-3 text-amber-600 shrink-0" />
+                                  <span>{catShort}</span>
+                                </button>
+                              )
+                            }
+                            if (tripIncidents.length > 0) {
+                              return (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setDetailsModalTab('timeline')
+                                    setDetailsModalTrip(trip)
+                                  }}
+                                  className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-mono text-stone-600 bg-stone-100 border border-stone-200 hover:bg-stone-200 transition-colors cursor-pointer"
+                                  title="Ver histórico de imprevisto já tratado"
+                                >
+                                  <Check className="w-2.5 h-2.5 text-emerald-600 shrink-0" />
+                                  <span>{tripIncidents.length} ocorr. tratada</span>
+                                </button>
+                              )
+                            }
+                            return null
+                          })()}
+                        </div>
                       </td>
 
-                      {/* COLUNA: AÇÕES (WHATSAPP, TELEGRAM, LINK, EDITAR, CANCELAR) */}
+                      {/* COLUNA: AÇÕES (DETALHES, HISTÓRICO, WHATSAPP, TELEGRAM, LINK, EDITAR, CANCELAR) */}
                       <td className="px-4 py-4 text-right">
                         <div className="flex items-center justify-end gap-1.5">
-                          {/* Botão Consultar Detalhes Fiscais / SEFAZ (Lupa) */}
+                          {/* Botão Consultar Detalhes Fiscais / SEFAZ (Olho) */}
                           <button
                             type="button"
-                            onClick={() => setDetailsModalTrip(trip)}
-                            className="inline-flex items-center justify-center p-2 rounded-[6px] bg-[#0D9488]/10 text-[#0D9488] hover:bg-[#0D9488] hover:text-white transition-all shadow-2xs border border-[#0D9488]/30"
+                            onClick={() => {
+                              setDetailsModalTab('details')
+                              setDetailsModalTrip(trip)
+                            }}
+                            className="inline-flex items-center justify-center p-2 rounded-[6px] bg-[#0D9488]/10 text-[#0D9488] hover:bg-[#0D9488] hover:text-white transition-all shadow-2xs border border-[#0D9488]/30 cursor-pointer"
                             title="Consultar Detalhes do Transporte e Dados Fiscais SEFAZ"
                           >
                             <Eye className="w-4 h-4" />
+                          </button>
+
+                          {/* Botão Linha do Tempo 360º & Imprevistos (Histórico) */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setDetailsModalTab('timeline')
+                              setDetailsModalTrip(trip)
+                            }}
+                            className={`inline-flex items-center justify-center p-2 rounded-[6px] transition-all shadow-2xs border cursor-pointer ${
+                              getTripIncidents(trip.sefaz_metadata).some((i) => i.status === 'open')
+                                ? 'bg-amber-100 text-amber-800 border-amber-400 hover:bg-amber-600 hover:text-white'
+                                : 'bg-stone-100 text-stone-700 border-stone-200 hover:bg-[#0F172A] hover:text-white'
+                            }`}
+                            title="Linha do Tempo de Rastreabilidade & Registro de Imprevistos"
+                          >
+                            <History className="w-4 h-4" />
                           </button>
 
                           {/* Botão WhatsApp */}
@@ -1059,7 +1168,7 @@ export function TripsDashboardTable({
         </div>
       )}
 
-      {/* Modal de Consulta e Detalhes Fiscais SEFAZ (Lupa) */}
+      {/* Modal de Consulta, Linha do Tempo e Detalhes Fiscais SEFAZ */}
       <CteDetailsModal
         trip={detailsModalTrip}
         isOpen={Boolean(detailsModalTrip)}
@@ -1067,6 +1176,8 @@ export function TripsDashboardTable({
         allTrips={trips}
         allDrivers={drivers}
         onDriverAssigned={handleDriverAssigned}
+        onTripMetadataUpdated={handleTripMetadataUpdated}
+        initialTab={detailsModalTab}
       />
     </div>
   )

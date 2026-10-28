@@ -7,6 +7,14 @@ import {
   getTelegramFileDirectUrl,
 } from '@/utils/telegram'
 import { sendArrivalEmail, sendCompletionEmail } from '@/utils/mailer'
+import {
+  appendTripAuditEvent,
+  appendTripIncident,
+  updatePendingTelegramIncident,
+  parseSafeMetadata,
+  INCIDENT_CATEGORIES,
+  IncidentCategory,
+} from '@/utils/trip-audit'
 
 export const dynamic = 'force-dynamic'
 
@@ -83,16 +91,124 @@ export async function POST(request: NextRequest) {
         await answerTelegramCallbackQuery(callbackId, 'Desfazendo finalização...')
         await handleRollbackFinishAction(tripId, fromChatId)
       } else if (data.startsWith('TRANSIT_')) {
+        const tripId = data.replace('TRANSIT_', '')
         await answerTelegramCallbackQuery(callbackId, 'Viagem em trânsito!')
+        try {
+          const pool = getDbPool()
+          const tRes = await pool.query(
+            `SELECT t.sefaz_metadata, d.name as driver_name FROM trips t LEFT JOIN drivers d ON t.driver_id = d.id WHERE t.id = $1`,
+            [tripId]
+          )
+          if (tRes.rows.length > 0) {
+            const updatedMeta = appendTripAuditEvent(tRes.rows[0].sefaz_metadata, {
+              type: 'IN_TRANSIT_CONFIRMED',
+              title: 'Motorista confirmou viagem Em Trânsito',
+              description: 'Confirmação de deslocamento normal enviada pelo motorista via Bot Telegram.',
+              channel: 'telegram',
+              actor: tRes.rows[0].driver_name || 'Motorista (Telegram)',
+            })
+            await pool.query(`UPDATE trips SET sefaz_metadata = $1 WHERE id = $2`, [JSON.stringify(updatedMeta), tripId])
+          }
+        } catch {}
         await sendTelegramTextMessage(
           fromChatId,
           '👍 <b>AuditCargo:</b> Perfeito! Viagem confirmada em trânsito. Dirija com atenção e nos avise assim que encostar no destino.'
         )
+      } else if (data.startsWith('ISSUE_CAT|')) {
+        const parts = data.split('|')
+        const rawCategory = (parts[1] || 'outros') as IncidentCategory
+        const tripId = parts[2] || ''
+        const catInfo = INCIDENT_CATEGORIES[rawCategory] || INCIDENT_CATEGORIES.outros
+
+        await answerTelegramCallbackQuery(callbackId, `Imprevisto: ${catInfo.shortLabel}`)
+
+        try {
+          const pool = getDbPool()
+          const tRes = await pool.query(
+            `SELECT t.id, t.token, t.destination, t.sefaz_metadata, d.name as driver_name
+             FROM trips t
+             LEFT JOIN drivers d ON t.driver_id = d.id
+             WHERE t.id = $1 LIMIT 1`,
+            [tripId]
+          )
+
+          if (tRes.rows.length > 0) {
+            const trip = tRes.rows[0]
+            const { metadata: updatedMeta } = appendTripIncident(trip.sefaz_metadata, {
+              category: rawCategory,
+              description: `Imprevisto sinalizado pelo motorista via Bot Telegram (${catInfo.label}). Aguardando relato ou foto detalhada.`,
+              channel: 'telegram',
+              reportedBy: trip.driver_name || 'Motorista (Telegram)',
+              awaitingTelegramDetails: true,
+            })
+
+            await pool.query(`UPDATE trips SET sefaz_metadata = $1 WHERE id = $2`, [
+              JSON.stringify(updatedMeta),
+              trip.id,
+            ])
+
+            await sendTelegramTextMessage(
+              fromChatId,
+              `⚠️ <b>Imprevisto Registrado: ${catInfo.label}</b>\n\n` +
+                `A central de monitoramento já recebeu o alerta na Viagem <b>#${trip.token}</b> (${trip.destination}).\n\n` +
+                `💬 <b>Agora, digite uma mensagem aqui no chat explicando o que aconteceu</b> (ex: número da NF vencida, motivo da recusa ou tempo de fila) ou envie uma <b>foto</b> para anexarmos ao chamado:`
+            )
+          } else {
+            await sendTelegramTextMessage(
+              fromChatId,
+              '⚠️ Não foi possível localizar a viagem para vincular o imprevisto.'
+            )
+          }
+        } catch (err) {
+          console.error('❌ [Telegram Webhook] Erro ao registrar ISSUE_CAT:', err)
+          await sendTelegramTextMessage(
+            fromChatId,
+            '⚠️ Ocorreu um erro ao salvar a categoria do imprevisto. Tente novamente.'
+          )
+        }
       } else if (data.startsWith('ISSUE_')) {
-        await answerTelegramCallbackQuery(callbackId, 'Alerta de imprevisto registrado!')
+        const tripId = data.replace('ISSUE_', '')
+        await answerTelegramCallbackQuery(callbackId, 'Selecione o tipo de imprevisto')
         await sendTelegramTextMessage(
           fromChatId,
-          '⚠️ <b>AuditCargo:</b> Alerta de imprevisto registrado! Nossa equipe de logística foi notificada. Se desejar, descreva aqui em poucas palavras o que ocorreu.'
+          '⚠️ <b>Reportar Imprevisto / Sinistro na Viagem</b>\n\n' +
+            'Qual o tipo de problema que você está enfrentando agora? Toque em uma das opções abaixo:',
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  {
+                    text: '📄 Nota Fiscal Vencida / Problema Fiscal',
+                    callback_data: `ISSUE_CAT|nf_fiscal|${tripId}`,
+                  },
+                ],
+                [
+                  {
+                    text: '📦 Recusa / Divergência de Mercadoria',
+                    callback_data: `ISSUE_CAT|recusa_divergencia|${tripId}`,
+                  },
+                ],
+                [
+                  {
+                    text: '⏳ Fila Grande / Demora na Descarga',
+                    callback_data: `ISSUE_CAT|fila_atraso|${tripId}`,
+                  },
+                ],
+                [
+                  {
+                    text: '🔧 Problema Mecânico / Veículo',
+                    callback_data: `ISSUE_CAT|veiculo_mecanico|${tripId}`,
+                  },
+                ],
+                [
+                  {
+                    text: '⚠️ Outro Imprevisto Operacional',
+                    callback_data: `ISSUE_CAT|outros|${tripId}`,
+                  },
+                ],
+              ],
+            },
+          }
         )
       } else if (data.startsWith('REQ_LOCATION_')) {
         await answerTelegramCallbackQuery(callbackId)
@@ -133,22 +249,33 @@ export async function POST(request: NextRequest) {
       console.log(`📍 [Telegram Webhook] Localização recebida de ${chatId}: ${latitude}, ${longitude}`)
 
       const pool = getDbPool()
-      const updateRes = await pool.query(
-        `
-        UPDATE trips
-        SET last_driver_latitude = $1,
-            last_driver_longitude = $2
-        WHERE telegram_chat_id = $3 AND status != 'finished'
-        RETURNING id, token, destination
-        `,
-        [latitude, longitude, String(chatId)]
-      )
+      const activeTrip = await findActiveTripByChatId(String(chatId))
 
-      if (updateRes.rows.length > 0) {
-        const trip = updateRes.rows[0]
+      if (activeTrip) {
+        const updatedMeta = appendTripAuditEvent(activeTrip.sefaz_metadata, {
+          type: 'GPS_UPDATED',
+          title: 'Localização GPS compartilhada pelo motorista',
+          description: `Coordenadas enviadas via Telegram: ${latitude.toFixed(5)}, ${longitude.toFixed(5)}.`,
+          channel: 'telegram',
+          actor: activeTrip.driver_name || 'Motorista (Telegram)',
+          lat: latitude,
+          lng: longitude,
+        })
+
+        await pool.query(
+          `
+          UPDATE trips
+          SET last_driver_latitude = $1,
+              last_driver_longitude = $2,
+              sefaz_metadata = $3
+          WHERE id = $4
+          `,
+          [latitude, longitude, JSON.stringify(updatedMeta), activeTrip.id]
+        )
+
         await sendTelegramTextMessage(
           chatId,
-          `📍 <b>AuditCargo:</b> Localização GPS registrada com sucesso para a Viagem <b>#${trip.token}</b>!\n` +
+          `📍 <b>AuditCargo:</b> Localização GPS registrada com sucesso para a Viagem <b>#${activeTrip.token}</b>!\n` +
             `Coordenadas: <code>${latitude.toFixed(5)}, ${longitude.toFixed(5)}</code>`
         )
       } else {
@@ -161,10 +288,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ ok: true })
     }
 
-    // 2.2. RECEBIMENTO DE FOTO (CANHOTO / COMPROVANTE)
+    // 2.2. RECEBIMENTO DE FOTO (CANHOTO / COMPROVANTE OU FOTO DE IMPREVISTO)
     if (message.photo && Array.isArray(message.photo) && message.photo.length > 0) {
       const bestPhoto = message.photo[message.photo.length - 1]
       const fileId = bestPhoto.file_id
+      const caption = (message.caption || '').trim()
       console.log(`📷 [Telegram Webhook] Foto recebida de ${chatId}: ${fileId}`)
 
       const fileUrl = await getTelegramFileDirectUrl(fileId)
@@ -174,13 +302,49 @@ export async function POST(request: NextRequest) {
 
         if (activeTrip) {
           const pool = getDbPool()
+          const currentMeta = parseSafeMetadata(activeTrip.sefaz_metadata)
+
+          // Verifica se há um imprevisto aguardando complemento/foto no Telegram
+          if (currentMeta.pending_telegram_incident_id) {
+            const { metadata: updatedMeta, updatedIncident } = updatePendingTelegramIncident(
+              activeTrip.sefaz_metadata,
+              {
+                description: caption || undefined,
+                photoUrl: fileUrl,
+                actor: activeTrip.driver_name || 'Motorista (Telegram)',
+              }
+            )
+
+            await pool.query(`UPDATE trips SET sefaz_metadata = $1 WHERE id = $2`, [
+              JSON.stringify(updatedMeta),
+              activeTrip.id,
+            ])
+
+            await sendTelegramTextMessage(
+              chatId,
+              `📸 <b>AuditCargo:</b> Foto${caption ? ' e relato' : ''} anexada(s) com sucesso ao imprevisto <b>(${updatedIncident?.categoryLabel || 'Ocorrência'})</b> da Viagem <b>#${activeTrip.token}</b>!\n\nNossa central já possui a evidência registrada no histórico da viagem.`
+            )
+            return NextResponse.json({ ok: true })
+          }
+
+          const updatedMeta = appendTripAuditEvent(activeTrip.sefaz_metadata, {
+            type: 'PHOTO_UPLOADED',
+            title: 'Foto de comprovante / canhoto enviada',
+            description: caption
+              ? `Foto enviada pelo motorista via Telegram: "${caption}".`
+              : 'Foto de canhoto ou comprovante de entrega enviada via Bot Telegram.',
+            channel: 'telegram',
+            actor: activeTrip.driver_name || 'Motorista (Telegram)',
+            photoUrl: fileUrl,
+          })
+
           await pool.query(
             `
             UPDATE trips
-            SET checkin_photo_url = $1, delivery_receipt_url = $1
-            WHERE id = $2
+            SET checkin_photo_url = $1, delivery_receipt_url = $1, sefaz_metadata = $2
+            WHERE id = $3
             `,
-            [fileUrl, activeTrip.id]
+            [fileUrl, JSON.stringify(updatedMeta), activeTrip.id]
           )
 
           const trip = activeTrip
@@ -279,6 +443,34 @@ export async function POST(request: NextRequest) {
     // Tenta encontrar uma viagem ativa para o motorista pelo chatId
     const activeTripForChat = await findActiveTripByChatId(String(chatId))
     if (activeTripForChat) {
+      const currentMeta = parseSafeMetadata(activeTripForChat.sefaz_metadata)
+
+      // Se o motorista acabou de clicar em uma categoria de imprevisto e enviou o texto detalhando o problema
+      if (currentMeta.pending_telegram_incident_id && text.length >= 2) {
+        const pool = getDbPool()
+        const { metadata: updatedMeta, updatedIncident } = updatePendingTelegramIncident(
+          activeTripForChat.sefaz_metadata,
+          {
+            description: text,
+            actor: activeTripForChat.driver_name || 'Motorista (Telegram)',
+          }
+        )
+
+        await pool.query(`UPDATE trips SET sefaz_metadata = $1 WHERE id = $2`, [
+          JSON.stringify(updatedMeta),
+          activeTripForChat.id,
+        ])
+
+        await sendTelegramTextMessage(
+          chatId,
+          `✅ <b>Relato do imprevisto salvo com sucesso na Viagem #${activeTripForChat.token}!</b>\n\n` +
+            `📌 <b>Categoria:</b> ${updatedIncident?.categoryLabel || 'Imprevisto'}\n` +
+            `📝 <b>Descrição:</b> <i>"${text}"</i>\n\n` +
+            `Nossa equipe de logística já está visualizando sua ocorrência no Painel de Controle. Se desejar, você também pode enviar uma <b>foto</b> do problema aqui no chat.`
+        )
+        return NextResponse.json({ ok: true })
+      }
+
       await sendTripTelegramPrompt(chatId, {
         id: activeTripForChat.id,
         token: activeTripForChat.token,
@@ -325,8 +517,20 @@ async function linkTelegramTripByToken(token: string, chatId: string, telegramUs
 
     const trip = res.rows[0]
 
-    // Atualiza o telegram_chat_id na viagem
-    await pool.query('UPDATE trips SET telegram_chat_id = $1 WHERE id = $2', [chatId, trip.id])
+    const updatedMeta = appendTripAuditEvent(trip.sefaz_metadata, {
+      type: 'TELEGRAM_LINKED',
+      title: 'Viagem vinculada ao Bot Telegram do motorista',
+      description: `Motorista ${trip.driver_name || 'Condutor'}${telegramUsername ? ` (${telegramUsername})` : ''} iniciou acompanhamento pelo Telegram.`,
+      channel: 'telegram',
+      actor: trip.driver_name || 'Motorista (Telegram)',
+    })
+
+    // Atualiza o telegram_chat_id e auditoria na viagem
+    await pool.query('UPDATE trips SET telegram_chat_id = $1, sefaz_metadata = $2 WHERE id = $3', [
+      chatId,
+      JSON.stringify(updatedMeta),
+      trip.id,
+    ])
 
     // Atualiza também no cadastro do motorista para futuros envios proativos
     if (trip.driver_id) {
@@ -523,6 +727,24 @@ async function handleArrivedAction(tripId: string, chatId: string | number) {
     }
 
     const trip = updateRes.rows[0]
+    const driverInfo = await pool.query('SELECT name, phone FROM drivers WHERE id = $1', [trip.driver_id])
+    const driver = driverInfo.rows[0] || {}
+
+    try {
+      const updatedMeta = appendTripAuditEvent(trip.sefaz_metadata, {
+        type: 'ARRIVED',
+        title: 'Chegada confirmada no destino via Bot Telegram',
+        description: `Motorista ${driver.name || 'Condutor'} confirmou chegada na portaria (${trip.destination}).`,
+        channel: 'telegram',
+        actor: driver.name || 'Motorista (Telegram)',
+        photoUrl: trip.checkin_photo_url || null,
+      })
+      await pool.query('UPDATE trips SET sefaz_metadata = $1 WHERE id = $2', [
+        JSON.stringify(updatedMeta),
+        trip.id,
+      ])
+    } catch {}
+
     const timeFormatted = now.toLocaleTimeString('pt-BR', {
       hour: '2-digit',
       minute: '2-digit',
@@ -570,9 +792,6 @@ async function handleArrivedAction(tripId: string, chatId: string | number) {
     }
 
     // Atualiza o menu do telegram
-    const driverInfo = await pool.query('SELECT name, phone FROM drivers WHERE id = $1', [trip.driver_id])
-    const driver = driverInfo.rows[0] || {}
-
     await sendTripTelegramPrompt(chatId, {
       id: trip.id,
       token: trip.token,
@@ -616,6 +835,20 @@ async function handleRollbackAction(tripId: string, chatId: string | number) {
     const driverInfo = await pool.query('SELECT name, phone FROM drivers WHERE id = $1', [trip.driver_id])
     const driver = driverInfo.rows[0] || {}
 
+    try {
+      const updatedMeta = appendTripAuditEvent(trip.sefaz_metadata, {
+        type: 'ARRIVAL_REVERTED',
+        title: 'Chegada desfeita pelo motorista (Rollback Telegram)',
+        description: `O motorista ${driver.name || 'Condutor'} desfez a chegada pelo Bot Telegram.`,
+        channel: 'telegram',
+        actor: driver.name || 'Motorista (Telegram)',
+      })
+      await pool.query('UPDATE trips SET sefaz_metadata = $1 WHERE id = $2', [
+        JSON.stringify(updatedMeta),
+        trip.id,
+      ])
+    } catch {}
+
     await sendTripTelegramPrompt(chatId, {
       id: trip.id,
       token: trip.token,
@@ -653,6 +886,20 @@ async function handleRollbackFinishAction(tripId: string, chatId: string | numbe
     
     const driverInfo = await pool.query('SELECT name, phone FROM drivers WHERE id = $1', [trip.driver_id])
     const driver = driverInfo.rows[0] || {}
+
+    try {
+      const updatedMeta = appendTripAuditEvent(trip.sefaz_metadata, {
+        type: 'FINISH_REVERTED',
+        title: 'Finalização desfeita pelo motorista (Rollback Telegram)',
+        description: `O motorista ${driver.name || 'Condutor'} reabriu a descarga pelo Bot Telegram.`,
+        channel: 'telegram',
+        actor: driver.name || 'Motorista (Telegram)',
+      })
+      await pool.query('UPDATE trips SET sefaz_metadata = $1 WHERE id = $2', [
+        JSON.stringify(updatedMeta),
+        trip.id,
+      ])
+    } catch {}
 
     await sendTripTelegramPrompt(chatId, {
       id: trip.id,
@@ -696,6 +943,20 @@ async function handleFinishDischargeAction(tripId: string, chatId: string | numb
 
     const driverInfo = await pool.query('SELECT name, phone FROM drivers WHERE id = $1', [trip.driver_id])
     const driver = driverInfo.rows[0] || {}
+
+    try {
+      const updatedMeta = appendTripAuditEvent(trip.sefaz_metadata, {
+        type: 'FINISHED',
+        title: 'Descarga concluída via Bot Telegram',
+        description: `Motorista ${driver.name || 'Condutor'} finalizou a descarga e liberou o veículo via Bot Telegram.`,
+        channel: 'telegram',
+        actor: driver.name || 'Motorista (Telegram)',
+      })
+      await pool.query('UPDATE trips SET sefaz_metadata = $1 WHERE id = $2', [
+        JSON.stringify(updatedMeta),
+        trip.id,
+      ])
+    } catch {}
 
     await sendTripTelegramPrompt(chatId, {
       id: trip.id,

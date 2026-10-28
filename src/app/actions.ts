@@ -15,6 +15,14 @@ import { formatCNPJ, EMAIL_REGEX } from '@/utils/masks'
 import { parseCTeXml } from '@/utils/sefaz/sync-service'
 import { syncCteEmailsFromMailbox } from '@/utils/email/email-xml-sync'
 import { parseProcedaConemb, processEdiLoteInDatabase } from '@/utils/edi/conemb-parser'
+import {
+  appendTripAuditEvent,
+  appendTripIncident,
+  resolveTripIncidentInMeta,
+  parseSafeMetadata,
+  IncidentCategory,
+  INCIDENT_CATEGORIES,
+} from '@/utils/trip-audit'
 import crypto from 'crypto'
 
 // ==========================================
@@ -1414,13 +1422,21 @@ export async function createTrip(payload: {
     }
   }
 
+  const initialMeta = appendTripAuditEvent(payload.sefaz_metadata || {}, {
+    type: 'CREATED',
+    title: 'Viagem criada no Painel de Controle',
+    description: `Transporte emitido para ${payload.destination.trim()} com motorista ${driverCheck.name}. Serviço: ${service_type}.`,
+    channel: 'painel_web',
+    actor: user.name || user.email || 'Operador',
+  })
+
   const insertObj: any = {
     company_id,
     branch_id,
     driver_id: payload.driver_id,
     cte_number: payload.cte_number?.trim() || null,
     cte_key: payload.cte_key?.trim() || null,
-    sefaz_metadata: payload.sefaz_metadata || null,
+    sefaz_metadata: initialMeta,
     service_type,
     status,
     sender: payload.sender?.trim() || null,
@@ -1510,6 +1526,18 @@ export async function sendWhatsAppTripStatusPromptAction(tripId: string) {
     return { success: false, error: result.error || 'Erro ao enviar mensagem via WhatsApp Meta.' }
   }
 
+  try {
+    const updatedMeta = appendTripAuditEvent(trip.sefaz_metadata, {
+      type: 'NOTIFICATION_SENT',
+      title: 'Cobrança de status enviada via WhatsApp',
+      description: `Mensagem disparada para ${trip.drivers?.name || 'Motorista'} (${trip.drivers?.phone}).`,
+      channel: 'whatsapp',
+      actor: user.name || user.email || 'Operador',
+    })
+    await supabase.from('trips').update({ sefaz_metadata: updatedMeta }).eq('id', tripId)
+    revalidatePath('/')
+  } catch {}
+
   return { success: true, message: 'Mensagem de cobrança enviada com sucesso no WhatsApp do motorista!' }
 }
 
@@ -1551,6 +1579,18 @@ export async function sendTelegramTripStatusPromptAction(tripId: string) {
       telegramLink,
     }
   }
+
+  try {
+    const updatedMeta = appendTripAuditEvent(trip.sefaz_metadata, {
+      type: 'NOTIFICATION_SENT',
+      title: 'Acompanhamento enviado via Bot Telegram',
+      description: `Solicitação interativa enviada no Telegram para ${trip.drivers?.name || 'Motorista'}.`,
+      channel: 'telegram',
+      actor: user.name || user.email || 'Operador',
+    })
+    await supabase.from('trips').update({ sefaz_metadata: updatedMeta }).eq('id', tripId)
+    revalidatePath('/')
+  } catch {}
 
   return {
     success: true,
@@ -1620,6 +1660,13 @@ export async function updateTrip(
     }
   }
 
+  const { data: currentTripData } = await supabase
+    .from('trips')
+    .select('sefaz_metadata, status, destination')
+    .eq('id', id)
+    .eq('organization_id', user.organization_id)
+    .maybeSingle()
+
   const updateData: any = {}
   if (payload.cte_number !== undefined) updateData.cte_number = payload.cte_number?.trim() || null
   if (payload.service_type !== undefined) updateData.service_type = payload.service_type
@@ -1628,6 +1675,19 @@ export async function updateTrip(
   if (payload.invoices !== undefined) updateData.invoices = payload.invoices
   if (payload.driver_id !== undefined) updateData.driver_id = payload.driver_id
   if (payload.status !== undefined) updateData.status = payload.status
+
+  if (currentTripData) {
+    const isCancel = payload.status === 'cancelled'
+    updateData.sefaz_metadata = appendTripAuditEvent(currentTripData.sefaz_metadata, {
+      type: isCancel ? 'TRIP_CANCELLED' : 'TRIP_UPDATED',
+      title: isCancel ? 'Transporte cancelado' : 'Dados do transporte editados no Painel',
+      description: isCancel
+        ? `Transporte cancelado pelo administrador ${user.name || user.email}.`
+        : `Dados cadastrais/operacionais da viagem atualizados no painel.`,
+      channel: 'painel_web',
+      actor: user.name || user.email || 'Operador',
+    })
+  }
 
   const { data, error } = await supabase
     .from('trips')
@@ -1644,6 +1704,7 @@ export async function updateTrip(
       destination,
       invoices,
       token,
+      sefaz_metadata,
       arrival_time,
       completion_time,
       created_at,
@@ -1664,9 +1725,25 @@ export async function updateTrip(
 export async function cancelTrip(id: string) {
   const user = await requireAdmin()
   const supabase = await createClient()
+
+  const { data: existing } = await supabase
+    .from('trips')
+    .select('sefaz_metadata')
+    .eq('id', id)
+    .eq('organization_id', user.organization_id)
+    .maybeSingle()
+
+  const updatedMeta = appendTripAuditEvent(existing?.sefaz_metadata, {
+    type: 'TRIP_CANCELLED',
+    title: 'Viagem cancelada',
+    description: `Viagem cancelada manualmente pelo administrador ${user.name || user.email}.`,
+    channel: 'painel_web',
+    actor: user.name || user.email || 'Administrador',
+  })
+
   const { data, error } = await supabase
     .from('trips')
-    .update({ status: 'cancelled' })
+    .update({ status: 'cancelled', sefaz_metadata: updatedMeta })
     .eq('id', id)
     .eq('organization_id', user.organization_id)
     .select()
@@ -1706,7 +1783,7 @@ export async function registerCheckin(
   // 1. Verificação de integridade e autorização
   const { data: currentTrip, error: tripCheckError } = await supabase
     .from('trips')
-    .select('id, token, status, arrival_time')
+    .select('id, token, status, arrival_time, sefaz_metadata, drivers(name)')
     .eq('id', tripId)
     .single()
 
@@ -1774,11 +1851,27 @@ export async function registerCheckin(
   }
 
   const arrivalTime = new Date().toISOString()
+  const actorName = user ? (user.name || user.email || 'Operador') : ((currentTrip.drivers as any)?.name || 'Motorista')
+  const channel = user ? 'painel_web' : 'motorista_web'
+
+  const updatedMeta = appendTripAuditEvent(currentTrip.sefaz_metadata, {
+    type: 'ARRIVED',
+    title: 'Chegada registrada na portaria / cliente',
+    description: `Check-in de chegada realizado${lat && lng ? ` com geolocalização GPS (${lat.toFixed(5)}, ${lng.toFixed(5)})` : ''}${photoUrl ? ' e foto anexada' : ''}.`,
+    channel,
+    actor: actorName,
+    timestamp: arrivalTime,
+    lat: lat || null,
+    lng: lng || null,
+    photoUrl: photoUrl || null,
+  })
+
   const updatePayload: any = {
     status: 'arrived',
     arrival_time: arrivalTime,
     checkin_lat: lat || null,
     checkin_lng: lng || null,
+    sefaz_metadata: updatedMeta,
   }
 
   if (photoUrl) {
@@ -1932,7 +2025,7 @@ export async function registerCheckout(tripId: string) {
   // 1. Verificação de integridade e autorização
   const { data: currentTrip, error: tripCheckError } = await supabase
     .from('trips')
-    .select('id, token, status, arrival_time')
+    .select('id, token, status, arrival_time, sefaz_metadata, drivers(name)')
     .eq('id', tripId)
     .single()
 
@@ -1950,12 +2043,24 @@ export async function registerCheckout(tripId: string) {
   }
 
   const completionTime = new Date().toISOString()
+  const actorName = user ? (user.name || user.email || 'Operador') : ((currentTrip.drivers as any)?.name || 'Motorista')
+  const channel = user ? 'painel_web' : 'motorista_web'
+
+  const updatedMeta = appendTripAuditEvent(currentTrip.sefaz_metadata, {
+    type: 'FINISHED',
+    title: 'Descarga concluída e veículo liberado',
+    description: `Check-out e encerramento da viagem realizados por ${actorName}.`,
+    channel,
+    actor: actorName,
+    timestamp: completionTime,
+  })
 
   const { data, error } = await supabase
     .from('trips')
     .update({
       status: 'finished',
       completion_time: completionTime,
+      sefaz_metadata: updatedMeta,
     })
     .eq('id', tripId)
     .select(`
@@ -2101,7 +2206,7 @@ export async function revertCheckin(tripId: string) {
   // 1. Verificação de integridade e autorização
   const { data: trip, error: tripError } = await supabase
     .from('trips')
-    .select('id, token, arrival_time')
+    .select('id, token, arrival_time, sefaz_metadata, drivers(name)')
     .eq('id', tripId)
     .single()
 
@@ -2127,6 +2232,15 @@ export async function revertCheckin(tripId: string) {
     }
   }
 
+  const actorName = user ? (user.name || user.email || 'Operador') : ((trip.drivers as any)?.name || 'Motorista')
+  const updatedMeta = appendTripAuditEvent(trip.sefaz_metadata, {
+    type: 'ARRIVAL_REVERTED',
+    title: 'Registro de chegada desfeito (Rollback)',
+    description: `O check-in de chegada foi revertido para o status Em Trânsito por ${actorName}.`,
+    channel: user ? 'painel_web' : 'motorista_web',
+    actor: actorName,
+  })
+
   const { data, error } = await supabase
     .from('trips')
     .update({
@@ -2135,6 +2249,7 @@ export async function revertCheckin(tripId: string) {
       checkin_lat: null,
       checkin_lng: null,
       checkin_photo_url: null,
+      sefaz_metadata: updatedMeta,
     })
     .eq('id', tripId)
     .select()
@@ -2155,7 +2270,7 @@ export async function revertCheckout(tripId: string) {
   // 1. Verificação de integridade e autorização
   const { data: trip, error: tripError } = await supabase
     .from('trips')
-    .select('id, token, completion_time')
+    .select('id, token, completion_time, sefaz_metadata, drivers(name)')
     .eq('id', tripId)
     .single()
 
@@ -2181,11 +2296,21 @@ export async function revertCheckout(tripId: string) {
     }
   }
 
+  const actorName = user ? (user.name || user.email || 'Operador') : ((trip.drivers as any)?.name || 'Motorista')
+  const updatedMeta = appendTripAuditEvent(trip.sefaz_metadata, {
+    type: 'FINISH_REVERTED',
+    title: 'Conclusão desfeita (Retorno para Portaria)',
+    description: `A finalização da viagem foi desfeita e o veículo retornou para Na Portaria por ${actorName}.`,
+    channel: user ? 'painel_web' : 'motorista_web',
+    actor: actorName,
+  })
+
   const { data, error } = await supabase
     .from('trips')
     .update({
       status: 'arrived',
       completion_time: null,
+      sefaz_metadata: updatedMeta,
     })
     .eq('id', tripId)
     .select()
@@ -2220,7 +2345,7 @@ export async function verifyDriverPin(token: string, pin: string) {
 
   const { data: trip } = await supabase
     .from('trips')
-    .select('id, drivers(pin)')
+    .select('id, sefaz_metadata, drivers(name, pin)')
     .eq('token', tokenUpper)
     .single()
 
@@ -2269,7 +2394,20 @@ export async function verifyDriverPin(token: string, pin: string) {
     sameSite: 'lax',
   })
 
+  try {
+    const driverName = (trip.drivers as any)?.name || 'Motorista'
+    const updatedMeta = appendTripAuditEvent(trip.sefaz_metadata, {
+      type: 'DRIVER_AUTH',
+      title: 'Motorista autenticado com PIN no Link da Viagem',
+      description: `O motorista ${driverName} desbloqueou o painel de acompanhamento (/v/${tokenUpper}) utilizando PIN de segurança.`,
+      channel: 'motorista_web',
+      actor: driverName,
+    })
+    await supabase.from('trips').update({ sefaz_metadata: updatedMeta }).eq('id', trip.id)
+  } catch {}
+
   revalidatePath(`/v/${token}`)
+  revalidatePath('/')
   return { success: true }
 }
 
@@ -3468,10 +3606,25 @@ export async function assignDriverAction(tripId: string, driverId: string) {
       return { success: false, error: 'Motorista não encontrado na organização.' }
     }
 
-    // 2. Atualiza a viagem com o novo motorista
+    // 2. Busca metadados atuais da viagem e vincula o novo motorista
+    const { data: existingTrip } = await supabase
+      .from('trips')
+      .select('sefaz_metadata')
+      .eq('id', tripId)
+      .eq('organization_id', orgId)
+      .maybeSingle()
+
+    const updatedMeta = appendTripAuditEvent(existingTrip?.sefaz_metadata, {
+      type: 'DRIVER_ASSIGNED',
+      title: `Motorista vinculado: ${driver.name}`,
+      description: `Motorista ${driver.name}${driver.default_plate ? ` (Placa: ${driver.default_plate})` : ''} atribuído ao transporte no painel.`,
+      channel: 'painel_web',
+      actor: user.name || user.email || 'Operador',
+    })
+
     const { data: trip, error: tripErr } = await supabase
       .from('trips')
-      .update({ driver_id: driverId })
+      .update({ driver_id: driverId, sefaz_metadata: updatedMeta })
       .eq('id', tripId)
       .eq('organization_id', orgId)
       .select('id, token, cte_number, sefaz_metadata')
@@ -3492,6 +3645,189 @@ export async function assignDriverAction(tripId: string, driverId: string) {
   } catch (err: any) {
     console.error('Erro em assignDriverAction:', err)
     return { success: false, error: err?.message || 'Falha ao vincular motorista ao transporte.' }
+  }
+}
+
+// ==========================================
+// ⚠️ GESTÃO DE IMPREVISTOS E SINISTROS OPERACIONAIS
+// ==========================================
+
+export async function reportTripIncidentAction(tripId: string, formData: FormData) {
+  try {
+    const supabase = await createClient()
+
+    const { data: currentTrip, error: tripErr } = await supabase
+      .from('trips')
+      .select('id, token, organization_id, sefaz_metadata, drivers(name)')
+      .eq('id', tripId)
+      .single()
+
+    if (tripErr || !currentTrip) {
+      return { error: 'Viagem não encontrada.' }
+    }
+
+    const cookieStore = await cookies()
+    const isDriverAuth = cookieStore.get(`driver_auth_${currentTrip.token.toUpperCase()}`)?.value === 'true'
+    const user = await getCurrentUser().catch(() => null)
+
+    if (!isDriverAuth && !user) {
+      return { error: 'Acesso não autorizado. Identifique-se com seu PIN ou faça login na central.' }
+    }
+
+    if (user && !user.is_super_admin && user.organization_id !== currentTrip.organization_id) {
+      return { error: 'Acesso não autorizado para esta organização.' }
+    }
+
+    const rawCategory = ((formData.get('category') as string) || 'outros').trim() as IncidentCategory
+    const validCategories = Object.keys(INCIDENT_CATEGORIES) as IncidentCategory[]
+    const category: IncidentCategory = validCategories.includes(rawCategory) ? rawCategory : 'outros'
+
+    const description = ((formData.get('description') as string) || '').trim()
+    if (!description || description.length < 3) {
+      return { error: 'Descreva brevemente o que aconteceu (mínimo de 3 caracteres).' }
+    }
+
+    const rawLat = formData.get('lat') ? parseFloat(formData.get('lat') as string) : null
+    const rawLng = formData.get('lng') ? parseFloat(formData.get('lng') as string) : null
+    const lat = rawLat && !isNaN(rawLat) ? rawLat : null
+    const lng = rawLng && !isNaN(rawLng) ? rawLng : null
+
+    let photoUrl: string | null = null
+    const file = formData.get('photo') as File | null
+    if (file && file.size > 0) {
+      const MAX_FILE_SIZE = 10 * 1024 * 1024
+      if (file.size > MAX_FILE_SIZE) {
+        return { error: 'A foto excede o limite máximo permitido de 10MB.' }
+      }
+
+      const ALLOWED_MIME_TYPES: Record<string, string> = {
+        'image/jpeg': 'jpg',
+        'image/jpg': 'jpg',
+        'image/png': 'png',
+        'image/webp': 'webp',
+      }
+      const safeExt = ALLOWED_MIME_TYPES[file.type]
+      if (!safeExt) {
+        return { error: 'Formato de foto inválido. São permitidos apenas arquivos JPEG, PNG e WebP.' }
+      }
+
+      const fileName = `incident_${tripId}_${Date.now()}.${safeExt}`
+      try {
+        const { data: uploadData, error: uploadError } = await supabase.storage
+          .from('trip-photos')
+          .upload(fileName, file, {
+            cacheControl: '3600',
+            upsert: false,
+          })
+
+        if (!uploadError && uploadData) {
+          const { data: urlData } = supabase.storage
+            .from('trip-photos')
+            .getPublicUrl(uploadData.path)
+          photoUrl = urlData.publicUrl
+        } else {
+          const buffer = Buffer.from(await file.arrayBuffer())
+          photoUrl = `data:${file.type};base64,${buffer.toString('base64')}`
+        }
+      } catch {
+        const buffer = Buffer.from(await file.arrayBuffer())
+        photoUrl = `data:${file.type};base64,${buffer.toString('base64')}`
+      }
+    }
+
+    const isOperator = Boolean(user && !isDriverAuth)
+    const channel = isOperator ? 'painel_web' : 'motorista_web'
+    const reportedBy = isOperator
+      ? (user?.name || user?.email || 'Central de Monitoramento')
+      : ((currentTrip.drivers as any)?.name || 'Motorista')
+
+    const { metadata: updatedMeta, incident } = appendTripIncident(currentTrip.sefaz_metadata, {
+      category,
+      description,
+      channel,
+      reportedBy,
+      photoUrl,
+      lat,
+      lng,
+    })
+
+    const { data, error } = await supabase
+      .from('trips')
+      .update({ sefaz_metadata: updatedMeta })
+      .eq('id', tripId)
+      .select('id, token, sefaz_metadata')
+      .single()
+
+    if (error) {
+      return { error: error.message }
+    }
+
+    revalidatePath(`/v/${currentTrip.token}`)
+    revalidatePath('/')
+    revalidatePath('/estadias')
+
+    return {
+      success: true,
+      incident,
+      sefaz_metadata: data.sefaz_metadata,
+    }
+  } catch (err: any) {
+    console.error('Erro em reportTripIncidentAction:', err)
+    return { error: err?.message || 'Falha ao registrar imprevisto na viagem.' }
+  }
+}
+
+export async function resolveTripIncidentAction(
+  tripId: string,
+  incidentId: string,
+  resolutionNotes?: string
+) {
+  try {
+    const user = await requireAuth()
+    const supabase = await createClient()
+
+    const { data: currentTrip, error: tripErr } = await supabase
+      .from('trips')
+      .select('id, token, organization_id, sefaz_metadata')
+      .eq('id', tripId)
+      .eq('organization_id', user.organization_id)
+      .single()
+
+    if (tripErr || !currentTrip) {
+      return { error: 'Viagem não encontrada na sua organização.' }
+    }
+
+    const resolvedBy = user.name || user.email || 'Central Operacional'
+    const updatedMeta = resolveTripIncidentInMeta(
+      currentTrip.sefaz_metadata,
+      incidentId,
+      resolvedBy,
+      resolutionNotes
+    )
+
+    const { data, error } = await supabase
+      .from('trips')
+      .update({ sefaz_metadata: updatedMeta })
+      .eq('id', tripId)
+      .eq('organization_id', user.organization_id)
+      .select('id, token, sefaz_metadata')
+      .single()
+
+    if (error) {
+      return { error: error.message }
+    }
+
+    revalidatePath(`/v/${currentTrip.token}`)
+    revalidatePath('/')
+    revalidatePath('/estadias')
+
+    return {
+      success: true,
+      sefaz_metadata: data.sefaz_metadata,
+    }
+  } catch (err: any) {
+    console.error('Erro em resolveTripIncidentAction:', err)
+    return { error: err?.message || 'Falha ao resolver imprevisto.' }
   }
 }
 

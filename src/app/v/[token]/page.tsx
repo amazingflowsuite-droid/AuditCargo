@@ -28,7 +28,9 @@ export default async function DriverTripPage({
       invoices,
       arrival_time,
       completion_time,
+      created_at,
       checkin_photo_url,
+      sefaz_metadata,
       companies(name),
       branches(name, city, email),
       drivers(name, default_plate, phone)
@@ -179,14 +181,17 @@ export default async function DriverTripPage({
         </CardContent>
       </Card>
 
-      {/* Ações do Motorista com Botões e Reversão */}
+      {/* Ações do Motorista com Botões, Imprevistos e Histórico */}
       <DriverActions
         tripId={trip.id}
         status={trip.status}
         token={trip.token}
         arrivalTime={trip.arrival_time}
         completionTime={trip.completion_time}
+        createdAt={(trip as any).created_at}
         checkinPhotoUrl={trip.checkin_photo_url}
+        sefazMetadata={(trip as any).sefaz_metadata}
+        driverName={driverName}
       />
     </div>
   )

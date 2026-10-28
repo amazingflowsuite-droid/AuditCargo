@@ -159,14 +159,20 @@ export async function sendTripTelegramPrompt(
       ],
       [
         {
-          text: '🔙 Desfazer Chegada (Rollback)',
-          callback_data: `ROLLBACK_ARRIVE_${trip.id}`,
+          text: '⚠️ Reportar Imprevisto / Sinistro',
+          callback_data: `ISSUE_${trip.id}`,
         },
       ],
       [
         {
           text: '📷 Enviar Canhoto / Foto',
           callback_data: `REQ_PHOTO_${trip.id}`,
+        },
+      ],
+      [
+        {
+          text: '🔙 Desfazer Chegada (Rollback)',
+          callback_data: `ROLLBACK_ARRIVE_${trip.id}`,
         },
       ],
     ]

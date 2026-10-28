@@ -17,12 +17,17 @@ import {
   ChevronRight,
   DollarSign,
   FileSpreadsheet,
+  History,
+  AlertTriangle,
 } from "lucide-react"
+import { CteDetailsModal } from "@/components/CteDetailsModal"
+import { getTripIncidents } from "@/utils/trip-audit"
 
 export function EstadiasReport({ trips }: { trips: any[] }) {
   const [filterSender, setFilterSender] = useState('')
   const [filterDate, setFilterDate] = useState('')
   const [currentPage, setCurrentPage] = useState(1)
+  const [selectedTimelineTrip, setSelectedTimelineTrip] = useState<any | null>(null)
   const pageSize = 25
 
   // Formatação de moeda BRL
@@ -289,23 +294,37 @@ export function EstadiasReport({ trips }: { trips: any[] }) {
                   <th className="px-4 py-3 font-medium text-right">Excedente</th>
                   <th className="px-4 py-3 font-medium text-right">Valor Estadia</th>
                   <th className="px-4 py-3 font-medium text-center">Status</th>
+                  <th className="px-4 py-3 font-medium text-right print:hidden">Rastreabilidade</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#E7E5E4]">
                 {filteredTrips.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="px-4 py-8 text-center text-[#78716C]">
+                    <td colSpan={10} className="px-4 py-8 text-center text-[#78716C]">
                       Nenhuma viagem finalizada encontrada para os filtros aplicados.
                     </td>
                   </tr>
                 ) : (
-                  paginatedTrips.map((t) => (
+                  paginatedTrips.map((t) => {
+                    const tripIncidents = getTripIncidents(t.sefaz_metadata)
+                    return (
                     <tr key={t.id} className="hover:bg-[#F5F5F4]/50 transition-colors">
                       <td className="px-4 py-3">
-                        <div className="font-medium text-[#1C1917]">
-                          {t.cte_number || 'S/ DACTE'} 
+                        <div className="font-medium text-[#1C1917] flex items-center gap-1.5 flex-wrap">
+                          <span>{t.cte_number || (t.token ? `#${t.token}` : 'S/ DACTE')}</span>
                           {t.invoices && t.invoices.length > 0 && (
                             <span className="text-[#0D9488] ml-1">({t.invoices.join(', ')})</span>
+                          )}
+                          {tripIncidents.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setSelectedTimelineTrip(t)}
+                              className="inline-flex items-center gap-1 px-1.5 py-0.2 rounded text-[10px] font-mono font-bold bg-amber-100 text-amber-900 border border-amber-300 hover:bg-amber-200 cursor-pointer"
+                              title="Esta viagem teve registro de imprevisto/sinistro"
+                            >
+                              <AlertTriangle className="w-3 h-3 text-amber-600" />
+                              <span>{tripIncidents.length} imprevisto(s)</span>
+                            </button>
                           )}
                         </div>
                         <div className="text-xs text-[#78716C]">{t.drivers?.name || 'Motorista não informado'}</div>
@@ -351,8 +370,19 @@ export function EstadiasReport({ trips }: { trips: any[] }) {
                           </span>
                         )}
                       </td>
+                      <td className="px-4 py-3 text-right print:hidden">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedTimelineTrip(t)}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium bg-stone-100 hover:bg-[#0F172A] text-stone-700 hover:text-white border border-stone-200 transition-colors cursor-pointer"
+                          title="Abrir Linha do Tempo e Histórico da Viagem"
+                        >
+                          <History className="w-3.5 h-3.5" />
+                          <span>Histórico</span>
+                        </button>
+                      </td>
                     </tr>
-                  ))
+                  )})
                 )}
               </tbody>
             </table>
@@ -395,6 +425,14 @@ export function EstadiasReport({ trips }: { trips: any[] }) {
           )}
         </CardContent>
       </Card>
+
+      {/* Modal de Linha do Tempo e Auditoria da Viagem */}
+      <CteDetailsModal
+        trip={selectedTimelineTrip}
+        isOpen={Boolean(selectedTimelineTrip)}
+        onClose={() => setSelectedTimelineTrip(null)}
+        initialTab="timeline"
+      />
     </div>
   )
 }

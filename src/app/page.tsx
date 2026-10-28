@@ -8,10 +8,12 @@ import {
   Clock,
   CheckCircle2,
   AlertCircle,
+  AlertTriangle,
 } from "lucide-react"
 import { TripsDashboardTable } from "@/components/TripsDashboardTable"
 import { SyncEmailCteButton } from "@/components/SyncEmailCteButton"
 import { ImportEdiButton } from "@/components/ImportEdiButton"
+import { getTripIncidents } from "@/utils/trip-audit"
 
 export default async function Home() {
   const currentUser = await requireAuth()
@@ -26,6 +28,9 @@ export default async function Home() {
   const arrivedTrips = trips.filter((t: any) => t.status === "arrived")
   const unloadingTrips = trips.filter((t: any) => t.status === "unloading")
   const finishedTrips = trips.filter((t: any) => t.status === "finished")
+  const tripsWithOpenIncidents = trips.filter((t: any) =>
+    getTripIncidents(t.sefaz_metadata).some((inc) => inc.status === "open")
+  )
 
   return (
     <div className="space-y-6">
@@ -50,7 +55,7 @@ export default async function Home() {
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         <Card className="hover:border-[#D6D3D1] transition-colors">
           <CardHeader className="p-4 pb-2">
             <CardDescription className="text-xs uppercase font-mono tracking-wider">
@@ -88,6 +93,28 @@ export default async function Home() {
           </CardHeader>
           <CardContent className="p-4 pt-0 text-xs text-[#78716C]">
             Franquia / Descarga em andamento
+          </CardContent>
+        </Card>
+
+        <Card
+          className={`border-l-4 ${
+            tripsWithOpenIncidents.length > 0
+              ? "border-l-amber-600 bg-amber-50/40 border-amber-300"
+              : "border-l-stone-400"
+          }`}
+        >
+          <CardHeader className="p-4 pb-2">
+            <CardDescription className="text-xs uppercase font-mono tracking-wider flex items-center gap-1.5 text-amber-800">
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-600" /> Com Imprevisto
+            </CardDescription>
+            <CardTitle className="text-2xl font-bold font-mono text-[#0F172A]">
+              {tripsWithOpenIncidents.length}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-4 pt-0 text-xs text-[#78716C]">
+            {tripsWithOpenIncidents.length > 0
+              ? "Aguardando tratativa da central"
+              : "Nenhuma ocorrência aberta"}
           </CardContent>
         </Card>
 
