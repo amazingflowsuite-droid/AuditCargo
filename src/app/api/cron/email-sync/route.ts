@@ -1,11 +1,13 @@
 import { NextResponse } from 'next/server'
+import { revalidatePath } from 'next/cache'
 import { syncCteEmailsFromMailbox } from '@/utils/email/email-xml-sync'
 
 export const dynamic = 'force-dynamic'
+export const maxDuration = 60
 
 /**
  * Endpoint de sincronização automática de e-mails do SSW (Hostinger IMAP).
- * Pode ser chamado por um cronjob agendado (ex: a cada 5 ou 10 minutos)
+ * Pode ser chamado por um cronjob agendado (ex: cron-job.org a cada 1-5 minutos)
  * ou webhook.
  * 
  * Exemplo de chamada:
@@ -21,7 +23,15 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Não autorizado' }, { status: 401 })
     }
 
-    const result = await syncCteEmailsFromMailbox()
+    const url = new URL(request.url)
+    const orgIdParam = url.searchParams.get('orgId') || undefined
+
+    const result = await syncCteEmailsFromMailbox(orgIdParam)
+
+    if (result.tripsCreated > 0 || result.tripsUpdated > 0) {
+      revalidatePath('/')
+      revalidatePath('/novo-transporte')
+    }
 
     return NextResponse.json({
       timestamp: new Date().toISOString(),

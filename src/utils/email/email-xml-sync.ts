@@ -2,25 +2,10 @@ import { ImapFlow } from 'imapflow'
 import { simpleParser } from 'mailparser'
 import crypto from 'crypto'
 import pg from 'pg'
+import { getDbPool } from '@/utils/db'
 import { parseCTeXml } from '@/utils/sefaz/sync-service'
 import { ParsedCTeData } from '@/utils/sefaz/types'
 import { parseProcedaConemb, processEdiLoteInDatabase } from '@/utils/edi/conemb-parser'
-
-const { Pool } = pg
-
-let pool: pg.Pool | null = null
-
-function getPool(): pg.Pool {
-  if (!pool) {
-    pool = new Pool({
-      connectionString: process.env.DATABASE_URL,
-      max: 5,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 10000,
-    })
-  }
-  return pool
-}
 
 export interface EmailSyncDetail {
   subject: string
@@ -68,7 +53,7 @@ export async function syncCteEmailsFromMailbox(targetOrgId?: string): Promise<Em
     }
   }
 
-  const db = getPool()
+  const db = getDbPool()
   const dbClient = await db.connect()
 
   const result: EmailSyncResult = {
@@ -85,14 +70,25 @@ export async function syncCteEmailsFromMailbox(targetOrgId?: string): Promise<Em
     port,
     secure,
     auth: { user, pass },
+    tls: { rejectUnauthorized: false },
     logger: false,
   })
 
   try {
-    // 1. Identifica a organização padrão (C Cargo / ccteste)
+    // 1. Identifica a organização padrão (prioriza C Cargo / organização ativa com empresa vinculada)
     let orgId = targetOrgId
     if (!orgId) {
-      const orgRes = await dbClient.query(`SELECT id FROM organizations ORDER BY created_at ASC LIMIT 1`)
+      const orgRes = await dbClient.query(`
+        SELECT o.id 
+        FROM organizations o
+        LEFT JOIN companies c ON c.organization_id = o.id
+        WHERE o.active = true
+        ORDER BY 
+          CASE WHEN o.name ILIKE '%C Cargo%' OR o.slug ILIKE '%c-cargo%' THEN 0 ELSE 1 END,
+          CASE WHEN c.id IS NOT NULL THEN 0 ELSE 1 END,
+          o.created_at DESC
+        LIMIT 1
+      `)
       orgId = orgRes.rows[0]?.id
     }
 
@@ -126,10 +122,10 @@ export async function syncCteEmailsFromMailbox(targetOrgId?: string): Promise<Em
         return result
       }
 
-      // Processa cada e-mail não lido
+      // Processa cada e-mail não lido usando UID explícito ({ uid: true })
       for (const uid of messagesToProcess) {
         try {
-          const download = await client.download(String(uid))
+          const download = await client.download(String(uid), undefined, { uid: true })
           if (!download || !download.content) continue
 
           // Parser MIME completo do e-mail
@@ -139,20 +135,25 @@ export async function syncCteEmailsFromMailbox(targetOrgId?: string): Promise<Em
           const emailDate = parsed.date ? parsed.date.toISOString() : undefined
 
           let foundCteInEmail = false
+          let hasDatabaseError = false
 
-          // Varre os anexos em busca de XMLs
+          // Varre os anexos em busca de EDIs ou XMLs
           if (parsed.attachments && parsed.attachments.length > 0) {
             for (const att of parsed.attachments) {
-              const isXmlName = att.filename?.toLowerCase().endsWith('.xml')
+              const filenameLower = (att.filename || '').toLowerCase()
+              const isXmlName = filenameLower.endsWith('.xml')
               const isXmlType = att.contentType?.includes('xml')
-              const isTxtName = att.filename?.toLowerCase().endsWith('.txt') || att.filename?.toLowerCase().endsWith('.edi')
+              const isTxtName = filenameLower.endsWith('.txt') || filenameLower.endsWith('.edi')
               const contentStr = att.content ? att.content.toString('utf-8') : ''
+              const trimmedContent = contentStr.trimStart()
               const hasXmlSignature = contentStr.includes('<cteProc') || contentStr.includes('<CTe')
-              const hasEdiSignature = contentStr.startsWith('000') && (contentStr.includes('CON50') || contentStr.includes('520'))
+              const hasEdiSignature =
+                trimmedContent.startsWith('000') &&
+                (trimmedContent.includes('CON50') || trimmedContent.includes('520') || trimmedContent.includes('522'))
 
               // 1. Processamento de EDI PROCEDA CONEMB (Manifesto / Romaneio SSW)
               if (isTxtName || hasEdiSignature) {
-                const parsedEdi = parseProcedaConemb(contentStr)
+                const parsedEdi = parseProcedaConemb(trimmedContent)
                 if (parsedEdi.isConemb && parsedEdi.totalCtes > 0) {
                   foundCteInEmail = true
                   const ediRes = await processEdiLoteInDatabase(dbClient, parsedEdi, orgId, companyId)
@@ -161,8 +162,9 @@ export async function syncCteEmailsFromMailbox(targetOrgId?: string): Promise<Em
                   result.tripsUpdated += ediRes.updated
 
                   for (const d of ediRes.details) {
+                    if (d.status === 'erro') hasDatabaseError = true
                     result.details.push({
-                      subject: `${subject} &bull; EDI Placa ${d.plate}`,
+                      subject: `${subject} • EDI Placa ${d.plate}`,
                       from: fromAddr,
                       date: emailDate,
                       cteNumber: d.cteNumber,
@@ -189,6 +191,8 @@ export async function syncCteEmailsFromMailbox(targetOrgId?: string): Promise<Em
                     result.tripsCreated++
                   } else if (tripResult.status === 'existente') {
                     result.tripsUpdated++
+                  } else if (tripResult.status === 'erro') {
+                    hasDatabaseError = true
                   }
 
                   result.details.push({
@@ -207,27 +211,52 @@ export async function syncCteEmailsFromMailbox(targetOrgId?: string): Promise<Em
             }
           }
 
-          // Se o próprio corpo do e-mail contiver XML colado (fallback)
-          if (!foundCteInEmail && parsed.text && (parsed.text.includes('<cteProc') || parsed.text.includes('<CTe'))) {
-            const cteData = parseCTeXml(parsed.text)
-            if (cteData) {
-              foundCteInEmail = true
-              result.ctesProcessed++
-              const tripResult = await processCteTripInDatabase(dbClient, cteData, orgId, companyId)
-              if (tripResult.status === 'criado') result.tripsCreated++
-              else if (tripResult.status === 'existente') result.tripsUpdated++
+          // Fallback se o próprio corpo do e-mail contiver EDI ou XML colado
+          if (!foundCteInEmail && parsed.text) {
+            const trimmedText = parsed.text.trimStart()
+            if (trimmedText.startsWith('000') && (trimmedText.includes('520') || trimmedText.includes('522'))) {
+              const parsedEdi = parseProcedaConemb(trimmedText)
+              if (parsedEdi.isConemb && parsedEdi.totalCtes > 0) {
+                foundCteInEmail = true
+                const ediRes = await processEdiLoteInDatabase(dbClient, parsedEdi, orgId, companyId)
+                result.ctesProcessed += parsedEdi.totalCtes
+                result.tripsCreated += ediRes.created
+                result.tripsUpdated += ediRes.updated
+                for (const d of ediRes.details) {
+                  if (d.status === 'erro') hasDatabaseError = true
+                  result.details.push({
+                    subject: `${subject} • EDI Placa ${d.plate}`,
+                    from: fromAddr,
+                    date: emailDate,
+                    cteNumber: d.cteNumber,
+                    sender: d.sender,
+                    status: d.status,
+                    error: d.error,
+                  })
+                }
+              }
+            } else if (parsed.text.includes('<cteProc') || parsed.text.includes('<CTe')) {
+              const cteData = parseCTeXml(parsed.text)
+              if (cteData) {
+                foundCteInEmail = true
+                result.ctesProcessed++
+                const tripResult = await processCteTripInDatabase(dbClient, cteData, orgId, companyId)
+                if (tripResult.status === 'criado') result.tripsCreated++
+                else if (tripResult.status === 'existente') result.tripsUpdated++
+                else if (tripResult.status === 'erro') hasDatabaseError = true
 
-              result.details.push({
-                subject,
-                from: fromAddr,
-                date: emailDate,
-                cteNumber: cteData.nCT,
-                cteKey: cteData.chCTe,
-                sender: cteData.remNome,
-                destination: `${cteData.destCidade}/${cteData.destUf}`,
-                status: tripResult.status,
-                error: tripResult.error,
-              })
+                result.details.push({
+                  subject,
+                  from: fromAddr,
+                  date: emailDate,
+                  cteNumber: cteData.nCT,
+                  cteKey: cteData.chCTe,
+                  sender: cteData.remNome,
+                  destination: `${cteData.destCidade}/${cteData.destUf}`,
+                  status: tripResult.status,
+                  error: tripResult.error,
+                })
+              }
             }
           }
 
@@ -240,8 +269,10 @@ export async function syncCteEmailsFromMailbox(targetOrgId?: string): Promise<Em
             })
           }
 
-          // Marca o e-mail como LIDO (\Seen) após processar com sucesso
-          await client.messageFlagsAdd(String(uid), ['\\Seen'])
+          // Marca o e-mail como LIDO (\Seen) usando { uid: true } apenas se não houve erro de gravação no banco
+          if (!hasDatabaseError) {
+            await client.messageFlagsAdd(String(uid), ['\\Seen'], { uid: true })
+          }
         } catch (msgErr: any) {
           console.error(`Erro ao processar e-mail UID ${uid}:`, msgErr)
           result.details.push({
