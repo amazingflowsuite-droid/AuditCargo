@@ -22,6 +22,7 @@ import {
 } from 'lucide-react'
 
 import { DriverQuickAssignCell } from './DriverQuickAssignCell'
+import { formatCNPJ } from '@/utils/masks'
 
 interface CteDetailsModalProps {
   trip: any
@@ -83,7 +84,7 @@ export function CteDetailsModal({
   }
 
   // Destinatários parseados
-  let recipientsList: Array<{ name: string; destination: string; invoices?: string }> = []
+  let recipientsList: Array<{ name: string; destination: string; invoices?: string; cnpj?: string | null }> = []
   if (Array.isArray(trip.recipients)) {
     recipientsList = trip.recipients
   } else if (typeof trip.recipients === 'string') {
@@ -285,15 +286,15 @@ export function CteDetailsModal({
                               Para: <strong>{c.destNome}</strong>
                             </span>
                           )}
-                          {(c.destCidade || c.destUf) && (
+                          {(c.destCidade || (c.destUf && c.destUf !== 'PS')) && (
                             <div className="flex items-center gap-1 font-medium text-emerald-700 bg-emerald-50/70 px-1.5 py-0.5 rounded border border-emerald-200/60">
                               <MapPin className="w-3 h-3 text-emerald-600" />
-                              <span>{c.destCidade ? `${c.destCidade}${c.destUf ? `/${c.destUf}` : ''}` : `UF: ${c.destUf}`}</span>
+                              <span>{c.destCidade ? `${c.destCidade}${c.destUf && c.destUf !== 'PS' ? `/${c.destUf}` : ''}` : `UF: ${c.destUf}`}</span>
                             </div>
                           )}
                           {c.destCnpj && (
                             <span className="text-[10px] font-mono text-stone-500 bg-stone-100 px-1.5 py-0.2 rounded border border-stone-200">
-                              CNPJ: {c.destCnpj}
+                              CNPJ: {formatCNPJ(c.destCnpj)}
                             </span>
                           )}
                         </div>
@@ -404,16 +405,25 @@ export function CteDetailsModal({
                 <Building2 className="w-4 h-4 text-[#0D9488]" />
                 <span>Remetente (Origem)</span>
               </div>
-              <div className="font-bold text-[#1C1917]">{trip.sender || 'Remetente não informado'}</div>
-              {sefazMeta.emitter_cnpj && (
+              <div className="font-bold text-[#1C1917]">{trip.sender || sefazMeta.sender_name || 'Remetente não informado'}</div>
+              {(sefazMeta.sender_cnpj || ctesList[0]?.remCnpj || (trip as any).senders?.cnpj) && (
                 <div className="text-xs text-[#78716C] font-mono">
-                  CNPJ: {sefazMeta.emitter_cnpj}
+                  CNPJ: {formatCNPJ(sefazMeta.sender_cnpj || ctesList[0]?.remCnpj || (trip as any).senders?.cnpj)}
                 </div>
               )}
-              {sefazMeta.origin_city && (
+              {(ctesList[0]?.remCidade || sefazMeta.sender_city || sefazMeta.origin_city) && (
                 <div className="text-xs text-[#57534E] flex items-center gap-1">
                   <MapPin className="w-3.5 h-3.5 text-[#A8A29E] shrink-0" />
-                  <span>{sefazMeta.origin_city}</span>
+                  <span>
+                    {ctesList[0]?.remCidade
+                      ? `${ctesList[0].remCidade}${ctesList[0].remUf ? `/${ctesList[0].remUf}` : ''}`
+                      : (sefazMeta.sender_city ? `${sefazMeta.sender_city}${sefazMeta.sender_uf ? `/${sefazMeta.sender_uf}` : ''}` : sefazMeta.origin_city)}
+                  </span>
+                </div>
+              )}
+              {sefazMeta.emitter_name && (
+                <div className="text-[11px] text-[#A8A29E] font-mono pt-1.5 border-t border-stone-100 mt-1.5">
+                  Transportadora: {sefazMeta.emitter_name} {sefazMeta.emitter_cnpj ? `(${formatCNPJ(sefazMeta.emitter_cnpj)})` : ''}
                 </div>
               )}
             </div>
@@ -424,13 +434,24 @@ export function CteDetailsModal({
                 <MapPin className="w-4 h-4 text-emerald-600" />
                 <span>Destino / Entrega</span>
               </div>
-              <div className="font-bold text-[#1C1917]">{trip.destination || 'Destino conforme CT-e'}</div>
-              {recipientsList.length > 0 && recipientsList[0].name && (
+              <div className="font-bold text-[#1C1917]">
+                {trip.destination && !trip.destination.includes('/PS')
+                  ? trip.destination
+                  : ctesList[0]?.destCidade
+                  ? `${ctesList[0].destCidade}${ctesList[0].destUf && ctesList[0].destUf !== 'PS' ? `/${ctesList[0].destUf}` : ''}`
+                  : 'Destino conforme CT-e'}
+              </div>
+              {((recipientsList.length > 0 && recipientsList[0].name && !recipientsList[0].name.startsWith('Destinatário (')) || ctesList[0]?.destNome) && (
                 <div className="text-xs text-[#57534E]">
-                  Destinatário: <strong>{recipientsList[0].name}</strong>
+                  Destinatário: <strong>{(!recipientsList[0]?.name?.startsWith('Destinatário (') ? recipientsList[0]?.name : null) || ctesList[0]?.destNome || recipientsList[0]?.name}</strong>
                 </div>
               )}
-              {recipientsList.length > 0 && recipientsList[0].destination && (
+              {((recipientsList.length > 0 && recipientsList[0].cnpj) || ctesList[0]?.destCnpj) && (
+                <div className="text-xs text-[#78716C] font-mono">
+                  CNPJ: {formatCNPJ(recipientsList[0]?.cnpj || ctesList[0]?.destCnpj)}
+                </div>
+              )}
+              {recipientsList.length > 0 && recipientsList[0].destination && !recipientsList[0].destination.includes('Estado PS') && (
                 <div className="text-xs text-[#78716C] font-mono">
                   {recipientsList[0].destination}
                 </div>

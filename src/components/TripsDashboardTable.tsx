@@ -626,13 +626,18 @@ export function TripsDashboardTable({
                       </td>
                       <td className="px-4 py-4">
                         {trip.sender && (
-                          <div className="text-xs text-[#78716C] font-mono truncate max-w-[200px]">
+                          <div className="text-xs text-[#78716C] font-mono truncate max-w-[220px]" title={trip.sender}>
                             De: {trip.sender}
                           </div>
                         )}
-                        <div className="font-semibold text-[#1C1917] mt-0.5">
+                        <div className="font-semibold text-[#1C1917] mt-0.5 truncate max-w-[220px]" title={trip.destination}>
                           Para: {trip.destination}
                         </div>
+                        {Array.isArray(trip.recipients) && trip.recipients[0]?.name && !trip.recipients[0].name.startsWith('Destinatário (') && (
+                          <div className="text-[11px] text-[#57534E] truncate max-w-[220px] font-medium" title={trip.recipients[0].name}>
+                            {trip.recipients[0].name}
+                          </div>
+                        )}
                         {trip.sefaz_metadata?.total_weight_kg ? (
                           <div className="text-[11px] text-[#0F766E] font-mono mt-0.5 font-medium flex items-center gap-1 flex-wrap">
                             <span>Peso: {Number(trip.sefaz_metadata.total_weight_kg).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} kg</span>

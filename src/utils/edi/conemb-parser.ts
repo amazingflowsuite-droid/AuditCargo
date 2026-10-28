@@ -132,9 +132,29 @@ export function parseProcedaConemb(ediText: string): ParsedEdiConemb {
       const tomadorCnpj = line.slice(95, 109).trim()
       const condFreteRaw = line.slice(38, 39).trim()
       const condicaoFrete: 'CIF' | 'FOB' = condFreteRaw === 'F' ? 'FOB' : 'CIF'
-      const destUf = line.length >= 337 && line.slice(335, 337).trim().length === 2
-        ? line.slice(335, 337).trim()
-        : undefined
+
+      // No registro 522 do PROCEDA CONEMB 5.0 (350 caracteres):
+      // Posição 334-336: UF Origem (ex: "SP")
+      // Posição 336-338: UF Expedidor (ex: "SP")
+      // Posição 338-340: UF Destino (ex: "RJ", "RS", "SP")
+      const VALID_BRAZILIAN_UFS = new Set([
+        'AC','AL','AP','AM','BA','CE','DF','ES','GO','MA','MT','MS','MG',
+        'PA','PB','PR','PE','PI','RJ','RN','RS','RO','RR','SC','SP','SE','TO'
+      ])
+      let destUf: string | undefined
+      if (line.length >= 340) {
+        const candidateDest = line.slice(338, 340).trim().toUpperCase()
+        if (VALID_BRAZILIAN_UFS.has(candidateDest)) {
+          destUf = candidateDest
+        }
+      }
+      let remUf: string | undefined
+      if (line.length >= 336) {
+        const candidateOrig = line.slice(334, 336).trim().toUpperCase()
+        if (VALID_BRAZILIAN_UFS.has(candidateOrig)) {
+          remUf = candidateOrig
+        }
+      }
 
       // Chave do CT-e (44 dígitos contíguos na linha)
       const chCTeMatch = line.match(/\b(\d{44})\b/)
@@ -168,6 +188,7 @@ export function parseProcedaConemb(ediText: string): ParsedEdiConemb {
         issueDate,
         condicaoFrete,
         remCnpj: remCnpj && remCnpj !== '00000000000000' ? remCnpj : undefined,
+        remUf,
         destCnpj: destCnpj && destCnpj !== '00000000000000' ? destCnpj : undefined,
         tomadorCnpj: tomadorCnpj && tomadorCnpj !== '00000000000000' ? tomadorCnpj : undefined,
         destUf,
@@ -274,6 +295,46 @@ export function parseProcedaConemb(ediText: string): ParsedEdiConemb {
 }
 
 /**
+ * Consulta dados cadastrais do CNPJ na BrasilAPI para enriquecer Destinatário / Remetente
+ */
+async function fetchCnpjInfo(cnpj: string): Promise<{
+  razao_social?: string
+  municipio?: string
+  uf?: string
+  logradouro?: string
+  numero?: string
+  bairro?: string
+  cep?: string
+  telefone?: string
+} | null> {
+  const clean = cnpj.replace(/\D/g, '')
+  if (clean.length !== 14) return null
+  try {
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 3000)
+    const res = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${clean}`, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' },
+      signal: controller.signal,
+    })
+    clearTimeout(timeout)
+    if (!res.ok) return null
+    const data = await res.json()
+    return {
+      razao_social: data.razao_social || data.nome_fantasia,
+      municipio: data.municipio,
+      uf: data.uf,
+      logradouro: data.logradouro,
+      numero: data.numero,
+      bairro: data.bairro,
+      cep: data.cep,
+      telefone: data.ddd_telefone_1,
+    }
+  } catch (e) {
+    return null
+  }
+}
+
+/**
  * Cria ou atualiza as viagens de um lote EDI CONEMB no banco de dados,
  * vinculando automaticamente o motorista pela placa do veículo.
  */
@@ -330,28 +391,74 @@ export async function processEdiLoteInDatabase(
   const manifestsMap = new Map<string, ParsedEdiManifest>()
 
   for (const cte of parsedEdi.ctes) {
-    // Cruzamento com destinatários cadastrados pelo CNPJ
+    // Cruzamento com destinatários cadastrados pelo CNPJ ou enriquecimento automático via BrasilAPI
     if (cte.destCnpj) {
       const cleanDestCnpj = cte.destCnpj.replace(/\D/g, '')
-      const matchedRec = existingRecipients.find(
+      let matchedRec = existingRecipients.find(
         (r) => (r.cnpj || '').replace(/\D/g, '') === cleanDestCnpj
       )
       if (matchedRec) {
         cte.destNome = matchedRec.name
         if (matchedRec.city) cte.destCidade = matchedRec.city
+        if (matchedRec.address) cte.destEndereco = matchedRec.address
+      } else if (cleanDestCnpj.length === 14) {
+        const info = await fetchCnpjInfo(cleanDestCnpj)
+        if (info) {
+          if (info.razao_social) cte.destNome = info.razao_social
+          if (info.municipio) cte.destCidade = info.municipio
+          if (info.uf) cte.destUf = info.uf
+          if (info.logradouro) {
+            cte.destEndereco = `${info.logradouro}${info.numero ? `, ${info.numero}` : ''}${info.bairro ? ` - ${info.bairro}` : ''}`
+          }
+
+          // Persiste no banco de dados na tabela recipients para enriquecer o cadastro da organização
+          try {
+            const insRes = await dbClient.query(
+              `INSERT INTO recipients (name, cnpj, city, address, zip_code, phone, organization_id, company_id)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+               ON CONFLICT (id) DO NOTHING
+               RETURNING id, name, cnpj, city, address`,
+              [
+                cte.destNome || `Destinatário (${formatCNPJ(cleanDestCnpj)})`,
+                formatCNPJ(cleanDestCnpj),
+                cte.destCidade || null,
+                cte.destEndereco || null,
+                info.cep || null,
+                info.telefone || null,
+                orgId,
+                companyId,
+              ]
+            )
+            if (insRes.rows[0]) {
+              existingRecipients.push(insRes.rows[0])
+            }
+          } catch (e) {
+            // Ignora duplicidade
+          }
+        }
       }
     }
 
     // Cruzamento com remetentes cadastrados pelo CNPJ
     if (cte.remCnpj) {
       const cleanRemCnpj = cte.remCnpj.replace(/\D/g, '')
-      const matchedSend = existingSenders.find(
+      let matchedSend = existingSenders.find(
         (s) => (s.cnpj || '').replace(/\D/g, '') === cleanRemCnpj
       )
       if (matchedSend) {
-        cte.remNome = matchedSend.name
-        if (matchedSend.city) cte.remCidade = matchedSend.city
-        if (matchedSend.address) cte.remEndereco = matchedSend.address
+        if (!cte.remNome) cte.remNome = matchedSend.name
+        if (!cte.remCidade && matchedSend.city) cte.remCidade = matchedSend.city
+        if (!cte.remEndereco && matchedSend.address) cte.remEndereco = matchedSend.address
+      } else if (!cte.remNome && cleanRemCnpj.length === 14) {
+        const info = await fetchCnpjInfo(cleanRemCnpj)
+        if (info) {
+          if (info.razao_social) cte.remNome = info.razao_social
+          if (info.municipio) cte.remCidade = info.municipio
+          if (info.uf) cte.remUf = info.uf
+          if (info.logradouro) {
+            cte.remEndereco = `${info.logradouro}${info.numero ? `, ${info.numero}` : ''}${info.bairro ? ` - ${info.bairro}` : ''}`
+          }
+        }
       }
     }
 
@@ -375,7 +482,7 @@ export async function processEdiLoteInDatabase(
         remTelefone: cte.remTelefone,
         destCity: cte.destCidade
           ? `${cte.destCidade}${cte.destUf ? `/${cte.destUf}` : ''}`
-          : (cte.destUf ? `Destino ${cte.destUf}` : 'Destino'),
+          : (cte.destUf ? `${cte.destUf}` : 'Destino'),
         destinations: [],
         totalWeightKg: 0,
         totalCalculatedWeightKg: 0,
@@ -403,7 +510,7 @@ export async function processEdiLoteInDatabase(
     // Acumula destinos reais das entregas
     const dest = cte.destCidade
       ? `${cte.destCidade}${cte.destUf ? `/${cte.destUf}` : ''}`
-      : (cte.destUf ? `Destino/${cte.destUf}` : '')
+      : (cte.destUf ? `${cte.destUf}` : '')
     if (dest && !m.destinations.includes(dest)) {
       m.destinations.push(dest)
     }
@@ -459,8 +566,14 @@ export async function processEdiLoteInDatabase(
         observations: `Romaneio SSW ${manifest.formattedPlate} • ${manifest.ctes.length} CT-es • ${manifest.invoices.length} NFs • ${manifest.totalCubagemM3.toFixed(2)} m³`,
         emitter_cnpj: parsedEdi.cnpjTransportadora || null,
         emitter_name: parsedEdi.transportadora || null,
+        sender_name: manifest.remNome || null,
+        sender_cnpj: manifest.remCnpj ? formatCNPJ(manifest.remCnpj) : null,
+        sender_city: manifest.remCidade || null,
+        sender_uf: manifest.remUf || null,
         issue_date: manifest.issueDate || null,
-        origin_city: manifest.filial ? `Filial ${manifest.filial}` : 'Guarulhos/SP',
+        origin_city: manifest.remCidade
+          ? `${manifest.remCidade}${manifest.remUf ? `/${manifest.remUf}` : ''}`
+          : (manifest.filial ? `Filial ${manifest.filial}` : 'Guarulhos/SP'),
         destination_city: destCitySummary,
         source: 'edi_conemb_ssw_manifest',
         ctes: manifest.ctes.map((c) => ({
@@ -485,18 +598,33 @@ export async function processEdiLoteInDatabase(
         })),
       }
 
+      // Destinatários estruturados dos CT-es
+      const recipientsArray = manifest.ctes.map((c) => ({
+        name: c.destNome || (c.destCnpj ? `Destinatário (${formatCNPJ(c.destCnpj)})` : 'Destinatário'),
+        cnpj: c.destCnpj ? formatCNPJ(c.destCnpj) : null,
+        destination: c.destCidade
+          ? `${c.destCidade}${c.destUf ? `/${c.destUf}` : ''}`
+          : (c.destUf ? `${c.destUf}` : 'Destino'),
+        invoices: c.invoices.join(', '),
+        cteNumber: c.nCT,
+      }))
+
       if (existingRes.rows.length > 0) {
         await dbClient.query(
           `UPDATE trips 
            SET sefaz_metadata = $1,
                invoices = $2,
                destination = $3,
-               driver_id = COALESCE(driver_id, $4)
-           WHERE id = $5`,
+               recipients = $4,
+               sender = COALESCE($5, sender),
+               driver_id = COALESCE(driver_id, $6)
+           WHERE id = $7`,
           [
             JSON.stringify(sefazMetadata),
             manifest.invoices,
             destCitySummary,
+            JSON.stringify(recipientsArray),
+            manifest.remNome || null,
             matchedDriverId,
             existingRes.rows[0].id,
           ]
@@ -546,17 +674,6 @@ export async function processEdiLoteInDatabase(
           senderId = newSender.rows[0]?.id || null
         }
       }
-
-      // Destinatários estruturados dos CT-es
-      const recipientsArray = manifest.ctes.map((c) => ({
-        name: c.destNome || (c.destCnpj ? `Destinatário (${formatCNPJ(c.destCnpj)})` : 'Destinatário'),
-        cnpj: c.destCnpj ? formatCNPJ(c.destCnpj) : null,
-        destination: c.destCidade
-          ? `${c.destCidade}${c.destUf ? `/${c.destUf}` : ''}`
-          : (c.destUf ? `Estado ${c.destUf}` : 'Destino'),
-        invoices: c.invoices.join(', '),
-        cteNumber: c.nCT,
-      }))
 
       const tripToken = crypto.randomBytes(4).toString('hex').toUpperCase()
 
