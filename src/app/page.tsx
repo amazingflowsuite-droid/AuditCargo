@@ -97,11 +97,10 @@ export default async function Home() {
         </Card>
 
         <Card
-          className={`border-l-4 ${
-            tripsWithOpenIncidents.length > 0
+          className={`border-l-4 ${tripsWithOpenIncidents.length > 0
               ? "border-l-amber-600 bg-amber-50/40 border-amber-300"
               : "border-l-stone-400"
-          }`}
+            }`}
         >
           <CardHeader className="p-4 pb-2">
             <CardDescription className="text-xs uppercase font-mono tracking-wider flex items-center gap-1.5 text-amber-800">

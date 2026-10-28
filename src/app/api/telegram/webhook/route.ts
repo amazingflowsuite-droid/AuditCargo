@@ -114,10 +114,20 @@ export async function POST(request: NextRequest) {
           fromChatId,
           '👍 <b>AuditCargo:</b> Perfeito! Viagem confirmada em trânsito. Dirija com atenção e nos avise assim que encostar no destino.'
         )
-      } else if (data.startsWith('ISSUE_CAT|')) {
+      } else if (data.startsWith('IC|') || data.startsWith('ISSUE_CAT|')) {
         const parts = data.split('|')
-        const rawCategory = (parts[1] || 'outros') as IncidentCategory
+        const codeOrCat = parts[1] || 'outros'
         const tripId = parts[2] || ''
+        const shortCodeMap: Record<string, IncidentCategory> = {
+          nf: 'nf_fiscal',
+          rd: 'recusa_divergencia',
+          fa: 'fila_atraso',
+          vm: 'veiculo_mecanico',
+          ot: 'outros',
+        }
+        const rawCategory: IncidentCategory =
+          shortCodeMap[codeOrCat] ||
+          (codeOrCat in INCIDENT_CATEGORIES ? (codeOrCat as IncidentCategory) : 'outros')
         const catInfo = INCIDENT_CATEGORIES[rawCategory] || INCIDENT_CATEGORIES.outros
 
         await answerTelegramCallbackQuery(callbackId, `Imprevisto: ${catInfo.shortLabel}`)
@@ -168,7 +178,7 @@ export async function POST(request: NextRequest) {
         }
       } else if (data.startsWith('ISSUE_')) {
         const tripId = data.replace('ISSUE_', '')
-        await answerTelegramCallbackQuery(callbackId, 'Selecione o tipo de imprevisto')
+        await answerTelegramCallbackQuery(callbackId)
         await sendTelegramTextMessage(
           fromChatId,
           '⚠️ <b>Reportar Imprevisto / Sinistro na Viagem</b>\n\n' +
@@ -179,31 +189,31 @@ export async function POST(request: NextRequest) {
                 [
                   {
                     text: '📄 Nota Fiscal Vencida / Problema Fiscal',
-                    callback_data: `ISSUE_CAT|nf_fiscal|${tripId}`,
+                    callback_data: `IC|nf|${tripId}`,
                   },
                 ],
                 [
                   {
                     text: '📦 Recusa / Divergência de Mercadoria',
-                    callback_data: `ISSUE_CAT|recusa_divergencia|${tripId}`,
+                    callback_data: `IC|rd|${tripId}`,
                   },
                 ],
                 [
                   {
                     text: '⏳ Fila Grande / Demora na Descarga',
-                    callback_data: `ISSUE_CAT|fila_atraso|${tripId}`,
+                    callback_data: `IC|fa|${tripId}`,
                   },
                 ],
                 [
                   {
                     text: '🔧 Problema Mecânico / Veículo',
-                    callback_data: `ISSUE_CAT|veiculo_mecanico|${tripId}`,
+                    callback_data: `IC|vm|${tripId}`,
                   },
                 ],
                 [
                   {
                     text: '⚠️ Outro Imprevisto Operacional',
-                    callback_data: `ISSUE_CAT|outros|${tripId}`,
+                    callback_data: `IC|ot|${tripId}`,
                   },
                 ],
               ],
