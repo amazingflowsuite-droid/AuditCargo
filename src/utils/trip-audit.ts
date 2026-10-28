@@ -278,7 +278,7 @@ export function appendTripIncident(
     status: 'open',
   }
 
-  currentIncidents.push(newIncident)
+  currentIncidents.unshift(newIncident)
   meta.incidents = currentIncidents
   meta.has_open_incident = currentIncidents.some((i) => i.status === 'open')
 
@@ -435,7 +435,13 @@ export function getTripIncidents(tripOrMeta: any): TripIncident[] {
       ? tripOrMeta.sefaz_metadata
       : tripOrMeta
   const meta = parseSafeMetadata(raw)
-  return Array.isArray(meta.incidents) ? meta.incidents : []
+  const list: TripIncident[] = Array.isArray(meta.incidents) ? [...meta.incidents] : []
+  return list.sort((a, b) => {
+    if (a.status !== b.status) {
+      return a.status === 'open' ? -1 : 1
+    }
+    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  })
 }
 
 /**
@@ -538,6 +544,6 @@ export function getCompleteTripTimeline(trip: any): TripAuditEvent[] {
 
   const allEvents = [...syntheticLogs, ...recordedLogs]
   return allEvents.sort(
-    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    (a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
   )
 }

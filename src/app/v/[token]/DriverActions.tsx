@@ -654,11 +654,18 @@ export function DriverActions({
 
         {showTimeline && (
           <div className="p-3 pt-1 border-t border-[#E7E5E4] space-y-2.5 bg-[#FAFAF9]">
-            {timelineEvents.map((ev) => (
+            {timelineEvents.map((ev, idx) => (
               <div key={ev.id} className="flex items-start gap-2.5 text-xs border-l-2 border-[#0D9488] pl-2.5 py-0.5">
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="font-bold text-[#1C1917]">{ev.title}</span>
+                    <span className="font-bold text-[#1C1917] flex items-center gap-1.5 flex-wrap">
+                      {idx === 0 && (
+                        <span className="text-[9px] font-mono font-bold px-1.5 py-0.2 rounded bg-[#0D9488] text-white uppercase">
+                          Atual
+                        </span>
+                      )}
+                      <span>{ev.title}</span>
+                    </span>
                     <span className="text-[10px] font-mono text-[#78716C] shrink-0">
                       {new Date(ev.timestamp).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}{' '}
                       {new Date(ev.timestamp).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}

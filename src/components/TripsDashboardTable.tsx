@@ -795,7 +795,7 @@ export function TripsDashboardTable({
                             const tripIncidents = getTripIncidents(trip.sefaz_metadata)
                             const openIncs = tripIncidents.filter((i) => i.status === 'open')
                             if (openIncs.length > 0) {
-                              const latest = openIncs[openIncs.length - 1]
+                              const latest = openIncs[0]
                               const catShort = INCIDENT_CATEGORIES[latest.category]?.shortLabel || 'Imprevisto'
                               return (
                                 <button

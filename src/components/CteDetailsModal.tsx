@@ -377,8 +377,8 @@ export function CteDetailsModal({
                         Atenção: Este transporte possui {openIncidentsCount} imprevisto(s) aguardando tratativa!
                       </span>
                       <span className="text-amber-800">
-                        Último relato: {incidents[incidents.length - 1]?.categoryLabel} — &ldquo;
-                        {incidents[incidents.length - 1]?.description}&rdquo;
+                        Último relato: {incidents[0]?.categoryLabel} — &ldquo;
+                        {incidents[0]?.description}&rdquo;
                       </span>
                     </div>
                   </div>
@@ -1000,22 +1000,26 @@ export function CteDetailsModal({
 
               {/* 2. Linha do Tempo 360º (Histórico Completo de Rastreabilidade) */}
               <div className="space-y-3">
-                <div className="flex items-center justify-between border-b border-[#E7E5E4] pb-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap border-b border-[#E7E5E4] pb-2">
                   <div>
                     <h4 className="text-sm font-bold text-[#1C1917] flex items-center gap-2">
                       <History className="w-4 h-4 text-[#0D9488]" />
                       <span>Log de Rastreabilidade Completa da Viagem ({timelineEvents.length} eventos)</span>
                     </h4>
                     <p className="text-xs text-[#78716C]">
-                      Histórico cronológico auditável desde a criação do transporte até a liberação final.
+                      Exibindo do evento mais recente no topo até o marco inicial de criação da viagem.
                     </p>
                   </div>
+                  <span className="text-[10px] font-mono font-semibold px-2 py-0.5 rounded bg-teal-50 text-[#0F766E] border border-teal-200">
+                    ↓ Mais recente primeiro
+                  </span>
                 </div>
 
                 <div className="relative pl-6 space-y-3 before:content-[''] before:absolute before:left-2.5 before:top-2 before:bottom-2 before:w-0.5 before:bg-[#E7E5E4]">
-                  {timelineEvents.map((ev) => {
+                  {timelineEvents.map((ev, idx) => {
                     const visuals = getEventVisuals(ev)
                     const chBadge = AUDIT_CHANNEL_LABELS[ev.channel] || AUDIT_CHANNEL_LABELS.sistema
+                    const isLatest = idx === 0
 
                     return (
                       <div key={ev.id} className="relative">
@@ -1027,9 +1031,18 @@ export function CteDetailsModal({
                         </div>
 
                         {/* Card do Evento */}
-                        <div className={`p-3.5 rounded-lg border shadow-2xs space-y-1.5 ${visuals.cardBorder}`}>
+                        <div
+                          className={`p-3.5 rounded-lg border shadow-2xs space-y-1.5 ${visuals.cardBorder} ${
+                            isLatest ? 'ring-1 ring-[#0D9488]/30' : ''
+                          }`}
+                        >
                           <div className="flex items-center justify-between gap-2 flex-wrap">
                             <div className="flex items-center gap-2 flex-wrap">
+                              {isLatest && (
+                                <span className="text-[10px] font-mono font-bold px-1.5 py-0.2 rounded bg-[#0D9488] text-white uppercase">
+                                  Mais recente
+                                </span>
+                              )}
                               <span className="font-bold text-[#1C1917] text-xs">{ev.title}</span>
                               <span
                                 className={`text-[10px] font-mono px-1.5 py-0.2 rounded border font-semibold ${chBadge.badgeClass}`}
