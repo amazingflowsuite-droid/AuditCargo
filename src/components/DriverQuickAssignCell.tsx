@@ -171,14 +171,16 @@ export function DriverQuickAssignCell({
   const [isOpen, setIsOpen] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
   const [isAssigning, setIsAssigning] = useState(false)
+  const [assigningDriverId, setAssigningDriverId] = useState<string | null>(null)
   const [feedback, setFeedback] = useState<string | null>(null)
+  const [errorBanner, setErrorBanner] = useState<string | null>(null)
   const [mounted, setMounted] = useState(false)
 
   useEffect(() => {
     setMounted(true)
   }, [])
 
-  const dropdownRef = useRef<HTMLDivElement>(null)
+  const modalCardRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
 
   const plate = trip.sefaz_metadata?.plate || trip.drivers?.default_plate || ''
@@ -187,13 +189,8 @@ export function DriverQuickAssignCell({
     return computeDriverSuggestions(plate, allTrips, allDrivers)
   }, [plate, allTrips, allDrivers])
 
-  // Fecha popover ao clicar fora ou apertar Escape
+  // Fecha modal ao apertar Escape e foca na barra de busca
   useEffect(() => {
-    const handleClickOutside = (event: MouseEvent) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsOpen(false)
-      }
-    }
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
         setIsOpen(false)
@@ -201,7 +198,6 @@ export function DriverQuickAssignCell({
     }
 
     if (isOpen) {
-      document.addEventListener('mousedown', handleClickOutside)
       document.addEventListener('keydown', handleKeyDown)
       setTimeout(() => {
         searchInputRef.current?.focus()
@@ -209,17 +205,18 @@ export function DriverQuickAssignCell({
     }
 
     return () => {
-      document.removeEventListener('mousedown', handleClickOutside)
       document.removeEventListener('keydown', handleKeyDown)
     }
   }, [isOpen])
 
-  // Executa atribuição (otimista + server action)
+  // Executa atribuição (otimista + server action com Supabase)
   const handleAssign = async (driver: any) => {
     if (!driver || !driver.id || isAssigning || disabled) return
 
     setIsAssigning(true)
+    setAssigningDriverId(driver.id)
     setFeedback(null)
+    setErrorBanner(null)
 
     // Atualização otimista imediata na UI
     if (onDriverAssigned) {
@@ -233,13 +230,14 @@ export function DriverQuickAssignCell({
         setIsOpen(false)
         setTimeout(() => setFeedback(null), 4000)
       } else {
-        alert(res.error || 'Erro ao vincular motorista.')
+        setErrorBanner(res.error || 'Erro ao vincular motorista.')
       }
     } catch (err: any) {
       console.error('Falha ao vincular motorista:', err)
-      alert(err?.message || 'Erro inesperado ao atribuir motorista.')
+      setErrorBanner(err?.message || 'Erro inesperado ao atribuir motorista.')
     } finally {
       setIsAssigning(false)
+      setAssigningDriverId(null)
     }
   }
 
@@ -267,10 +265,14 @@ export function DriverQuickAssignCell({
     )
   }, [otherDrivers, normalizedSearch])
 
-  const currentDriverName = trip.drivers?.name
+  // Resolução resiliente do motorista atual (seja por join de objeto, array ou id direto)
+  const currentDriver =
+    (Array.isArray(trip.drivers) ? trip.drivers[0] : trip.drivers) ||
+    allDrivers.find((d) => d.id === trip.driver_id)
+  const currentDriverName = currentDriver?.name
 
   return (
-    <div className="relative" ref={dropdownRef}>
+    <div className="relative">
       {/* CENÁRIO 1: Motorista Já Vinculado */}
       {currentDriverName ? (
         <div className="group flex items-center justify-between gap-1.5 max-w-[220px]">
@@ -279,16 +281,16 @@ export function DriverQuickAssignCell({
               <span className="truncate" title={currentDriverName}>
                 {currentDriverName}
               </span>
-              {trip.drivers?.default_plate && (
+              {currentDriver?.default_plate && (
                 <span className="text-[10px] font-mono text-stone-500 bg-stone-100 px-1 py-0.2 rounded border border-stone-200 shrink-0">
-                  {trip.drivers.default_plate}
+                  {currentDriver.default_plate}
                 </span>
               )}
             </div>
             <div className="text-xs text-[#78716C] font-mono mt-0.5 flex items-center gap-1.5">
               <span>Placa: {plate || 'N/A'}</span>
-              {trip.drivers?.phone && (
-                <span className="text-stone-400">• {trip.drivers.phone}</span>
+              {currentDriver?.phone && (
+                <span className="text-stone-400">• {currentDriver.phone}</span>
               )}
             </div>
           </div>
@@ -297,7 +299,7 @@ export function DriverQuickAssignCell({
             <button
               type="button"
               onClick={() => setIsOpen(!isOpen)}
-              className="opacity-0 group-hover:opacity-100 text-stone-400 hover:text-[#0D9488] p-1 rounded hover:bg-stone-100 transition-all cursor-pointer shrink-0"
+              className="opacity-70 group-hover:opacity-100 text-stone-400 hover:text-[#0D9488] p-1 rounded hover:bg-stone-100 transition-all cursor-pointer shrink-0"
               title="Trocar motorista"
             >
               <ChevronDown className="w-3.5 h-3.5" />
@@ -374,10 +376,13 @@ export function DriverQuickAssignCell({
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs animate-in fade-in duration-150"
           onClick={(e) => {
-            if (e.target === e.currentTarget) setIsOpen(false)
+            if (e.target === e.currentTarget && !isAssigning) setIsOpen(false)
           }}
         >
-          <div className="bg-white rounded-xl shadow-2xl border border-[#E7E5E4] max-w-md w-full overflow-hidden text-xs animate-in zoom-in-95 duration-150 flex flex-col max-h-[85vh]">
+          <div
+            ref={modalCardRef}
+            className="bg-white rounded-xl shadow-2xl border border-[#E7E5E4] max-w-md w-full overflow-hidden text-xs animate-in zoom-in-95 duration-150 flex flex-col max-h-[85vh]"
+          >
             {/* Header com Ícone, Título e Dados da Carga */}
             <div className="px-5 py-3.5 border-b border-[#E7E5E4] bg-[#FAFAF9] flex items-center justify-between">
               <div className="flex items-center gap-3">
@@ -407,12 +412,23 @@ export function DriverQuickAssignCell({
               <button
                 type="button"
                 onClick={() => setIsOpen(false)}
-                className="p-1.5 text-stone-400 hover:text-stone-700 hover:bg-stone-100 rounded-lg transition-colors cursor-pointer"
+                disabled={isAssigning}
+                className="p-1.5 text-stone-400 hover:text-stone-700 hover:bg-stone-100 rounded-lg transition-colors cursor-pointer disabled:opacity-50"
                 title="Fechar"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
+
+            {/* Banner de Erro caso a gravação falhe */}
+            {errorBanner && (
+              <div className="mx-3 mt-3 p-2.5 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <strong className="font-semibold">Erro ao salvar no banco:</strong> {errorBanner}
+                </div>
+              </div>
+            )}
 
             {/* Campo de Busca */}
             <div className="p-3 border-b border-[#E7E5E4] bg-white">
@@ -454,7 +470,8 @@ export function DriverQuickAssignCell({
                   <button
                     type="button"
                     onClick={() => handleAssign(topSuggestion.driver)}
-                    className="w-full text-left p-2.5 rounded-md hover:bg-emerald-100/70 transition-colors flex items-center justify-between gap-2 border border-emerald-300/80 bg-white cursor-pointer shadow-2xs"
+                    disabled={isAssigning}
+                    className="w-full text-left p-2.5 rounded-md hover:bg-emerald-100/70 transition-colors flex items-center justify-between gap-2 border border-emerald-300/80 bg-white cursor-pointer shadow-2xs disabled:opacity-60"
                   >
                     <div className="truncate">
                       <div className="font-bold text-[#1C1917] flex items-center gap-1.5 text-xs">
@@ -467,9 +484,15 @@ export function DriverQuickAssignCell({
                         {topSuggestion.driver.default_plate && ` • Placa: ${topSuggestion.driver.default_plate}`}
                       </div>
                     </div>
-                    <span className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[11px] font-bold shrink-0 transition-colors">
-                      Atribuir
-                    </span>
+                    {assigningDriverId === topSuggestion.driver.id ? (
+                      <span className="px-2.5 py-1 bg-emerald-600 text-white rounded text-[11px] font-bold shrink-0 flex items-center gap-1.5">
+                        <Loader2 className="w-3 h-3 animate-spin" /> Salvando...
+                      </span>
+                    ) : (
+                      <span className="px-2.5 py-1 bg-emerald-600 hover:bg-emerald-700 text-white rounded text-[11px] font-bold shrink-0 transition-colors">
+                        Atribuir
+                      </span>
+                    )}
                   </button>
                 </div>
               )}
@@ -487,7 +510,8 @@ export function DriverQuickAssignCell({
                         key={idx}
                         type="button"
                         onClick={() => handleAssign(item.driver)}
-                        className="w-full text-left p-2 rounded-md hover:bg-[#F5F5F4] transition-colors flex items-center justify-between gap-2 cursor-pointer group border border-transparent hover:border-stone-200"
+                        disabled={isAssigning}
+                        className="w-full text-left p-2 rounded-md hover:bg-[#F5F5F4] transition-colors flex items-center justify-between gap-2 cursor-pointer group border border-transparent hover:border-stone-200 disabled:opacity-60"
                       >
                         <div className="truncate">
                           <div className="font-medium text-[#1C1917] group-hover:text-[#0D9488] truncate">
@@ -498,9 +522,15 @@ export function DriverQuickAssignCell({
                             {item.driver.phone && ` • ${item.driver.phone}`}
                           </div>
                         </div>
-                        <span className="text-[10px] font-mono text-stone-400 group-hover:text-[#0D9488] shrink-0">
-                          Selecionar →
-                        </span>
+                        {assigningDriverId === item.driver.id ? (
+                          <span className="text-[10px] font-mono text-[#0D9488] font-bold flex items-center gap-1 shrink-0">
+                            <Loader2 className="w-3 h-3 animate-spin" /> Salvando...
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-mono text-stone-400 group-hover:text-[#0D9488] shrink-0">
+                            Selecionar →
+                          </span>
+                        )}
                       </button>
                     ))}
                   </div>
@@ -524,7 +554,8 @@ export function DriverQuickAssignCell({
                         key={d.id}
                         type="button"
                         onClick={() => handleAssign(d)}
-                        className="w-full text-left p-2 rounded-md hover:bg-[#F5F5F4] transition-colors flex items-center justify-between gap-2 cursor-pointer group border border-transparent hover:border-stone-200"
+                        disabled={isAssigning}
+                        className="w-full text-left p-2 rounded-md hover:bg-[#F5F5F4] transition-colors flex items-center justify-between gap-2 cursor-pointer group border border-transparent hover:border-stone-200 disabled:opacity-60"
                       >
                         <div className="truncate">
                           <div className="font-medium text-[#1C1917] group-hover:text-[#0D9488] truncate">
@@ -535,9 +566,15 @@ export function DriverQuickAssignCell({
                             {d.default_plate && ` • Placa habitual: ${d.default_plate}`}
                           </div>
                         </div>
-                        <span className="text-[10px] font-mono text-stone-400 group-hover:text-[#0D9488] shrink-0">
-                          Selecionar →
-                        </span>
+                        {assigningDriverId === d.id ? (
+                          <span className="text-[10px] font-mono text-[#0D9488] font-bold flex items-center gap-1 shrink-0">
+                            <Loader2 className="w-3 h-3 animate-spin" /> Salvando...
+                          </span>
+                        ) : (
+                          <span className="text-[10px] font-mono text-stone-400 group-hover:text-[#0D9488] shrink-0">
+                            Selecionar →
+                          </span>
+                        )}
                       </button>
                     ))}
                   </div>

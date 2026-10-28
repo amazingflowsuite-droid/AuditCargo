@@ -3454,47 +3454,40 @@ export async function assignDriverAction(tripId: string, driverId: string) {
       return { success: false, error: 'Identificadores de transporte e motorista são obrigatórios.' }
     }
 
-    const pool = getDbPool()
-    const client = await pool.connect()
+    const supabase = await createClient()
 
-    try {
-      // 1. Verifica se o motorista pertence à organização
-      const driverRes = await client.query(
-        `SELECT id, name, phone, default_plate, telegram_chat_id, telegram_username 
-         FROM drivers 
-         WHERE id = $1 AND organization_id = $2`,
-        [driverId, orgId]
-      )
+    // 1. Verifica se o motorista pertence à organização
+    const { data: driver, error: driverErr } = await supabase
+      .from('drivers')
+      .select('id, name, phone, default_plate, telegram_chat_id, telegram_username')
+      .eq('id', driverId)
+      .eq('organization_id', orgId)
+      .maybeSingle()
 
-      if (driverRes.rows.length === 0) {
-        return { success: false, error: 'Motorista não encontrado na organização.' }
-      }
+    if (driverErr || !driver) {
+      return { success: false, error: 'Motorista não encontrado na organização.' }
+    }
 
-      const driver = driverRes.rows[0]
+    // 2. Atualiza a viagem com o novo motorista
+    const { data: trip, error: tripErr } = await supabase
+      .from('trips')
+      .update({ driver_id: driverId })
+      .eq('id', tripId)
+      .eq('organization_id', orgId)
+      .select('id, token, cte_number, sefaz_metadata')
+      .maybeSingle()
 
-      // 2. Atualiza a viagem com o novo motorista
-      const tripRes = await client.query(
-        `UPDATE trips 
-         SET driver_id = $1 
-         WHERE id = $2 AND organization_id = $3
-         RETURNING id, token, cte_number, sefaz_metadata`,
-        [driverId, tripId, orgId]
-      )
+    if (tripErr || !trip) {
+      return { success: false, error: tripErr?.message || 'Transporte não encontrado ou não autorizado.' }
+    }
 
-      if (tripRes.rows.length === 0) {
-        return { success: false, error: 'Transporte não encontrado ou não autorizado.' }
-      }
+    revalidatePath('/')
+    revalidatePath('/novo-transporte')
 
-      revalidatePath('/')
-      revalidatePath('/novo-transporte')
-
-      return {
-        success: true,
-        driver,
-        trip: tripRes.rows[0],
-      }
-    } finally {
-      client.release()
+    return {
+      success: true,
+      driver,
+      trip,
     }
   } catch (err: any) {
     console.error('Erro em assignDriverAction:', err)

@@ -84,6 +84,11 @@ export function TripsDashboardTable({
   const [isPending, startTransition] = useTransition()
   const [origin, setOrigin] = useState('')
 
+  // Sincroniza estado com props do servidor após revalidações
+  useEffect(() => {
+    setTrips(initialTrips)
+  }, [initialTrips])
+
   useEffect(() => {
     setOrigin(window.location.origin)
   }, [])
