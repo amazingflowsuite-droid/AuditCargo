@@ -1,6 +1,7 @@
 import { getDrivers, getCompanies } from "../actions"
 import { requireAuth } from "@/utils/supabase/auth"
 import { DriverManager } from "./DriverManager"
+import { ImportSswDriversButton } from "@/components/ImportSswDriversButton"
 
 export default async function MotoristasPage() {
   const currentUser = await requireAuth()
@@ -19,6 +20,10 @@ export default async function MotoristasPage() {
           <p className="text-sm text-[#57534E] mt-1">
             Cadastre, edite e gerencie condutores, credenciais de PIN e telefones para envio de links de viagem.
           </p>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          <ImportSswDriversButton companies={companies} />
         </div>
       </div>
 

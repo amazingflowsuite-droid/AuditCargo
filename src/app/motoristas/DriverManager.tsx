@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useTransition, useMemo, memo } from 'react'
+import React, { useState, useEffect, useTransition, useMemo, memo } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -533,7 +533,10 @@ const DriverCard = memo(function DriverCard({
           </div>
         ) : (
           <div className="flex items-center justify-between">
-            <span className="flex items-center gap-1 truncate max-w-[150px]" title={driver.cpf || "CPF não informado"}>
+            <span
+              className="flex items-center gap-1 truncate max-w-[150px]"
+              title={driver.cpf ? "CPF protegido (LGPD)" : "CPF não informado"}
+            >
               <CreditCard className="w-3 h-3 shrink-0" /> CPF: {maskCpf(driver.cpf)}
             </span>
             <a
@@ -573,6 +576,26 @@ export function DriverManager({
   // Edição e deleção
   const [editingId, setEditingId] = useState<string | null>(null)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+
+  // Sincroniza estado local quando a página revalida após importação em lote SSW
+  useEffect(() => {
+    setDrivers(initialDrivers)
+  }, [initialDrivers])
+
+  useEffect(() => {
+    const handleSswImport = (event: Event) => {
+      const customEvent = event as CustomEvent<{ createdDrivers: any[]; updatedDrivers: any[] }>
+      if (!customEvent.detail) return
+      const { createdDrivers = [], updatedDrivers = [] } = customEvent.detail
+      const updatedMap = new Map(updatedDrivers.map((d) => [d.id, d]))
+      setDrivers((prev) => {
+        const merged = prev.map((d) => (updatedMap.has(d.id) ? updatedMap.get(d.id) : d))
+        return [...createdDrivers, ...merged]
+      })
+    }
+    window.addEventListener('ssw-drivers-imported', handleSswImport)
+    return () => window.removeEventListener('ssw-drivers-imported', handleSswImport)
+  }, [])
 
   // Filtro memorizado de busca (Otimização de Performance)
   const filteredDrivers = useMemo(() => {

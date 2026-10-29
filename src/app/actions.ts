@@ -15,6 +15,7 @@ import { formatCNPJ, EMAIL_REGEX } from '@/utils/masks'
 import { parseCTeXml } from '@/utils/sefaz/sync-service'
 import { syncCteEmailsFromMailbox, getSswSyncHealth, classifyImapError, EmailSyncResult } from '@/utils/email/email-xml-sync'
 import { parseProcedaConemb, processEdiLoteInDatabase } from '@/utils/edi/conemb-parser'
+import { BlockedSswDriverInfo, Ssw047ParseResult, parseSsw047DriversReport } from '@/utils/ssw/driver-report-parser'
 import {
   appendTripAuditEvent,
   appendTripIncident,
@@ -950,6 +951,276 @@ export async function deleteDriver(id: string) {
 
   revalidatePath('/motoristas')
   return { success: true }
+}
+
+export interface SswDriverImportDetail {
+  name: string
+  phone: string
+  previousPhone?: string
+  maskedCpf: string
+  pin: string
+  status: 'criado' | 'atualizado'
+}
+
+export async function importSswDriversAction(
+  input: Ssw047ParseResult | string,
+  targetCompanyId?: string
+): Promise<{
+  success: boolean
+  error?: string
+  totalRecords?: number
+  validMobileCount?: number
+  ignoredEmptyPhone?: number
+  ignoredLandlineOrInvalid?: number
+  ignoredBlockedCount?: number
+  blockedDrivers?: BlockedSswDriverInfo[]
+  unchangedCount?: number
+  createdCount?: number
+  updatedCount?: number
+  changedDetails?: SswDriverImportDetail[]
+  createdDrivers?: any[]
+  updatedDrivers?: any[]
+}> {
+  try {
+    const user = await requireAuth()
+    if (!user.organization_id) {
+      return { success: false, error: 'Organização do usuário não identificada.' }
+    }
+
+    const parsed: Ssw047ParseResult =
+      typeof input === 'string' ? parseSsw047DriversReport(input) : input
+
+    if (parsed?.isMatricialFormat) {
+      return {
+        success: false,
+        error:
+          'Formato Matricial (Impressão) detectado. No SSW, o relatório de impressão omite a coluna de Celular/WhatsApp e corta o nome dos motoristas. Por favor, gere o mesmo relatório "047 - Relação de Motoristas" no SSW selecionando a opção de exportação em Excel / CSV.',
+      }
+    }
+
+    if (!parsed || !parsed.isValidReport || parsed.totalRecords === 0) {
+      return {
+        success: false,
+        error:
+          'O arquivo enviado não foi reconhecido como um relatório "047 - Relação de Motoristas" (formato Excel/CSV) válido do SSW.',
+      }
+    }
+
+    const supabase = await createClient()
+
+    // Valida ou obtém a empresa padrão da organização
+    let companyId = (targetCompanyId || '').trim()
+    if (companyId) {
+      const { data: comp } = await supabase
+        .from('companies')
+        .select('id')
+        .eq('id', companyId)
+        .eq('organization_id', user.organization_id)
+        .maybeSingle()
+
+      if (!comp) {
+        return { success: false, error: 'Empresa vinculada inválida.' }
+      }
+    } else {
+      companyId = (await getOrCreateTenantCompanyId(supabase, user.organization_id)) || ''
+    }
+
+    // Carrega motoristas existentes na organização para deduplicação rápida em memória
+    const { data: existingList, error: fetchError } = await supabase
+      .from('drivers')
+      .select(
+        'id, name, cpf, phone, default_plate, pin, company_id, telegram_chat_id, telegram_username, created_at, companies(name)'
+      )
+      .eq('organization_id', user.organization_id)
+
+    if (fetchError) {
+      return { success: false, error: 'Falha ao consultar base de motoristas: ' + fetchError.message }
+    }
+
+    const byCpf = new Map<string, any>()
+    const byNameWithoutCpf = new Map<string, any>()
+
+    for (const existing of existingList || []) {
+      const cleanExistingCpf = (existing.cpf || '').replace(/\D/g, '')
+      if (cleanExistingCpf.length === 11) {
+        byCpf.set(cleanExistingCpf, existing)
+      } else {
+        const normName = (existing.name || '')
+          .toUpperCase()
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 30)
+        if (normName) {
+          byNameWithoutCpf.set(normName, existing)
+        }
+      }
+    }
+
+    const maskCpfHelper = (cpfDigits: string) => {
+      if (cpfDigits.length !== 11) return '***.***.***-**'
+      return `***.${cpfDigits.slice(3, 6)}.${cpfDigits.slice(6, 9)}-**`
+    }
+
+    const toInsert: Array<{
+      company_id: string | null
+      name: string
+      cpf: string
+      phone: string
+      pin: string
+      organization_id: string
+    }> = []
+
+    const toUpdate: Array<{
+      id: string
+      cpf: string
+      phone: string
+      pin: string
+      previousPhone: string
+      name: string
+    }> = []
+
+    let unchangedCount = 0
+    const changedDetails: SswDriverImportDetail[] = []
+
+    for (const drv of parsed.validMobileDrivers) {
+      const cleanCpf = (drv.cpf || '').replace(/\D/g, '')
+      const cleanPhone = (drv.cleanPhone || drv.phone || '').replace(/\D/g, '')
+      const pin = (drv.pin || cleanCpf.slice(-4)).replace(/\D/g, '')
+      const name = (drv.name || '').trim()
+
+      if (name.length < 3 || cleanCpf.length !== 11 || cleanPhone.length !== 11 || pin.length !== 4) {
+        continue
+      }
+
+      const normName30 = name.toUpperCase().replace(/\s+/g, ' ').trim().slice(0, 30)
+      const existing = byCpf.get(cleanCpf) || byNameWithoutCpf.get(normName30)
+
+      if (!existing) {
+        toInsert.push({
+          company_id: companyId || null,
+          name,
+          cpf: cleanCpf,
+          phone: drv.phone,
+          pin,
+          organization_id: user.organization_id,
+        })
+        changedDetails.push({
+          name,
+          phone: drv.phone,
+          maskedCpf: maskCpfHelper(cleanCpf),
+          pin,
+          status: 'criado',
+        })
+      } else {
+        const existingCleanPhone = (existing.phone || '').replace(/\D/g, '')
+        const existingCleanCpf = (existing.cpf || '').replace(/\D/g, '')
+
+        const phoneChanged = existingCleanPhone !== cleanPhone
+        const cpfWasMissing = existingCleanCpf !== cleanCpf
+
+        if (!phoneChanged && !cpfWasMissing) {
+          // Registro idêntico: ignora silenciosamente conforme regra de reimportação
+          unchangedCount += 1
+        } else {
+          toUpdate.push({
+            id: existing.id,
+            cpf: cleanCpf,
+            phone: drv.phone,
+            pin: existing.pin && /^\d{4}$/.test(existing.pin) ? existing.pin : pin,
+            previousPhone: existing.phone || '',
+            name: existing.name || name,
+          })
+          changedDetails.push({
+            name: existing.name || name,
+            phone: drv.phone,
+            previousPhone: phoneChanged ? existing.phone || undefined : undefined,
+            maskedCpf: maskCpfHelper(cleanCpf),
+            pin: existing.pin && /^\d{4}$/.test(existing.pin) ? existing.pin : pin,
+            status: 'atualizado',
+          })
+        }
+      }
+    }
+
+    const createdDrivers: any[] = []
+    const updatedDrivers: any[] = []
+
+    // Inserção em lotes (chunks de 200) para suportar milhares de registros com alta performance
+    const CHUNK_SIZE = 200
+    for (let i = 0; i < toInsert.length; i += CHUNK_SIZE) {
+      const chunk = toInsert.slice(i, i + CHUNK_SIZE)
+      const { data: insertedRows, error: insertError } = await supabase
+        .from('drivers')
+        .insert(chunk)
+        .select(
+          'id, name, cpf, phone, default_plate, pin, company_id, telegram_chat_id, telegram_username, created_at, companies(name)'
+        )
+
+      if (insertError) {
+        console.error('Erro ao inserir lote de motoristas SSW:', insertError.message)
+        return {
+          success: false,
+          error: 'Erro ao gravar lote de motoristas no banco: ' + insertError.message,
+        }
+      }
+      if (insertedRows) {
+        createdDrivers.push(...insertedRows)
+      }
+    }
+
+    // Atualização em lotes paralelos controlados (25 por vez)
+    const UPDATE_BATCH_SIZE = 25
+    for (let i = 0; i < toUpdate.length; i += UPDATE_BATCH_SIZE) {
+      const batch = toUpdate.slice(i, i + UPDATE_BATCH_SIZE)
+      const results = await Promise.all(
+        batch.map((item) =>
+          supabase
+            .from('drivers')
+            .update({
+              cpf: item.cpf,
+              phone: item.phone,
+              pin: item.pin,
+            })
+            .eq('id', item.id)
+            .eq('organization_id', user.organization_id)
+            .select(
+              'id, name, cpf, phone, default_plate, pin, company_id, telegram_chat_id, telegram_username, created_at, companies(name)'
+            )
+            .single()
+        )
+      )
+
+      for (const res of results) {
+        if (res.data) {
+          updatedDrivers.push(res.data)
+        }
+      }
+    }
+
+    revalidatePath('/motoristas')
+
+    return {
+      success: true,
+      totalRecords: parsed.totalRecords,
+      validMobileCount: parsed.validMobileDrivers.length,
+      ignoredEmptyPhone: parsed.ignoredEmptyPhone,
+      ignoredLandlineOrInvalid: parsed.ignoredLandlineOrInvalid,
+      ignoredBlockedCount: parsed.ignoredBlockedCount ?? 0,
+      blockedDrivers: parsed.blockedDrivers ?? [],
+      unchangedCount,
+      createdCount: createdDrivers.length,
+      updatedCount: updatedDrivers.length,
+      changedDetails,
+      createdDrivers,
+      updatedDrivers,
+    }
+  } catch (err: any) {
+    console.error('Erro em importSswDriversAction:', err)
+    return {
+      success: false,
+      error: err?.message || 'Erro inesperado ao importar relação de motoristas do SSW.',
+    }
+  }
 }
 
 // ==========================================
