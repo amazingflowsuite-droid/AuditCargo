@@ -1,6 +1,7 @@
 import { getRecipients, getCompanies, getSenders } from "../actions"
 import { requireAuth } from "@/utils/supabase/auth"
 import { RecipientManager } from "./RecipientManager"
+import { ImportSswRecipientsButton } from "@/components/ImportSswRecipientsButton"
 
 export default async function DestinatariosPage() {
   const currentUser = await requireAuth()
@@ -20,6 +21,9 @@ export default async function DestinatariosPage() {
           <p className="text-sm text-[#57534E] mt-1">
             Gestão de clientes, atacadistas, lojas e centros de recebimento vinculados a cada Remetente.
           </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <ImportSswRecipientsButton companies={companies} senders={senders} />
         </div>
       </div>
 

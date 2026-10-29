@@ -3164,6 +3164,246 @@ export async function deleteSender(id: string) {
   return { success: true }
 }
 
+export interface SswClientImportDetail {
+  name: string
+  cnpj: string
+  city: string
+  phone?: string
+  status: 'criado' | 'atualizado'
+  note?: string
+}
+
+export interface SswClientImportSummary {
+  success: boolean
+  error?: string
+  totalRecords: number
+  createdCount: number
+  updatedCount: number
+  unchangedCount: number
+  changedDetails: SswClientImportDetail[]
+}
+
+/**
+ * Importação em massa de Remetentes a partir do relatório de clientes SSW.
+ */
+export async function importSswSendersAction(
+  clients: Array<{
+    name: string
+    cnpj: string
+    formattedCnpj?: string
+    ie?: string | null
+    address?: string | null
+    city?: string | null
+    zipCode?: string | null
+    phone?: string | null
+    email?: string | null
+  }>,
+  companyId?: string
+): Promise<SswClientImportSummary> {
+  const user = await requireAuth()
+  const supabase = await createClient()
+
+  if (!Array.isArray(clients) || clients.length === 0) {
+    return {
+      success: false,
+      error: 'Nenhum remetente válido enviado para importação.',
+      totalRecords: 0,
+      createdCount: 0,
+      updatedCount: 0,
+      unchangedCount: 0,
+      changedDetails: [],
+    }
+  }
+
+  // Previne IDOR em company_id
+  let targetCompanyId = (companyId || '').trim()
+  if (targetCompanyId) {
+    const { data: comp } = await supabase
+      .from('companies')
+      .select('id')
+      .eq('id', targetCompanyId)
+      .eq('organization_id', user.organization_id)
+      .single()
+    if (!comp) {
+      targetCompanyId = ''
+    }
+  }
+  if (!targetCompanyId && user.organization_id) {
+    targetCompanyId = (await getOrCreateTenantCompanyId(supabase, user.organization_id)) || ''
+  }
+
+  // Carrega remetentes existentes para deduplicação
+  const { data: existingSenders, error: fetchErr } = await supabase
+    .from('senders')
+    .select('id, name, cnpj, ie, address, city, zip_code, phone, email, franchise_hours, demurrage_hourly_rate')
+    .eq('organization_id', user.organization_id)
+
+  if (fetchErr) {
+    return {
+      success: false,
+      error: 'Erro ao consultar remetentes existentes: ' + fetchErr.message,
+      totalRecords: clients.length,
+      createdCount: 0,
+      updatedCount: 0,
+      unchangedCount: 0,
+      changedDetails: [],
+    }
+  }
+
+  const byCnpj = new Map<string, any>()
+  const byName = new Map<string, any>()
+
+  for (const s of existingSenders || []) {
+    const cleanCnpj = (s.cnpj || '').replace(/\D/g, '')
+    if (cleanCnpj.length >= 11) {
+      byCnpj.set(cleanCnpj, s)
+    }
+    const normName = (s.name || '').toUpperCase().replace(/\s+/g, ' ').trim()
+    if (normName) {
+      byName.set(normName, s)
+    }
+  }
+
+  const toInsert: any[] = []
+  const toUpdate: any[] = []
+  let unchangedCount = 0
+  const changedDetails: SswClientImportDetail[] = []
+  const seenInBatch = new Set<string>()
+
+  for (const item of clients) {
+    const name = (item.name || '').trim()
+    const cleanCnpj = (item.cnpj || '').replace(/\D/g, '')
+    if (!name || name.length < 3 || cleanCnpj.length < 11) continue
+
+    if (seenInBatch.has(cleanCnpj)) continue
+    seenInBatch.add(cleanCnpj)
+
+    const normName = name.toUpperCase().replace(/\s+/g, ' ').trim()
+    const existing = byCnpj.get(cleanCnpj) || byName.get(normName)
+
+    const formattedDoc = item.formattedCnpj || cleanCnpj
+
+    if (!existing) {
+      toInsert.push({
+        company_id: targetCompanyId || null,
+        name,
+        cnpj: formattedDoc,
+        ie: item.ie || null,
+        address: item.address || null,
+        city: item.city || null,
+        zip_code: item.zipCode || null,
+        phone: item.phone || null,
+        email: item.email || null,
+        franchise_hours: 5,
+        demurrage_hourly_rate: 65.0,
+        vehicle_franchises: [],
+        organization_id: user.organization_id,
+      })
+      changedDetails.push({
+        name,
+        cnpj: formattedDoc,
+        city: item.city || '',
+        phone: item.phone || undefined,
+        status: 'criado',
+      })
+    } else {
+      // Verifica se houve mudança relevante
+      const existingCleanPhone = (existing.phone || '').replace(/\D/g, '')
+      const newCleanPhone = (item.phone || '').replace(/\D/g, '')
+      const phoneChanged = newCleanPhone && existingCleanPhone !== newCleanPhone
+      const addressChanged = item.address && existing.address !== item.address
+      const cityChanged = item.city && existing.city !== item.city
+      const ieChanged = item.ie && existing.ie !== item.ie
+      const emailChanged = item.email && existing.email !== item.email
+
+      if (!phoneChanged && !addressChanged && !cityChanged && !ieChanged && !emailChanged) {
+        unchangedCount++
+      } else {
+        toUpdate.push({
+          id: existing.id,
+          name: existing.name || name,
+          cnpj: existing.cnpj || formattedDoc,
+          ie: item.ie || existing.ie || null,
+          address: item.address || existing.address || null,
+          city: item.city || existing.city || null,
+          zip_code: item.zipCode || existing.zip_code || null,
+          phone: item.phone || existing.phone || null,
+          email: item.email || existing.email || null,
+        })
+        changedDetails.push({
+          name: existing.name || name,
+          cnpj: existing.cnpj || formattedDoc,
+          city: item.city || existing.city || '',
+          phone: item.phone || existing.phone || undefined,
+          status: 'atualizado',
+        })
+      }
+    }
+  }
+
+  // Executa inserções em chunks de 100
+  const createdList: any[] = []
+  const CHUNK_SIZE = 100
+  for (let i = 0; i < toInsert.length; i += CHUNK_SIZE) {
+    const chunk = toInsert.slice(i, i + CHUNK_SIZE)
+    const { data: inserted, error: insErr } = await supabase
+      .from('senders')
+      .insert(chunk)
+      .select('id, name, cnpj')
+    if (insErr) {
+      console.error('Erro ao inserir remetentes SSW:', insErr.message)
+      return {
+        success: false,
+        error: 'Erro ao gravar remetentes no banco: ' + insErr.message,
+        totalRecords: clients.length,
+        createdCount: createdList.length,
+        updatedCount: 0,
+        unchangedCount,
+        changedDetails,
+      }
+    }
+    if (inserted) createdList.push(...inserted)
+  }
+
+  // Executa atualizações
+  let updatedCount = 0
+  const UPDATE_BATCH = 20
+  for (let i = 0; i < toUpdate.length; i += UPDATE_BATCH) {
+    const batch = toUpdate.slice(i, i + UPDATE_BATCH)
+    const resList = await Promise.all(
+      batch.map((up) =>
+        supabase
+          .from('senders')
+          .update({
+            ie: up.ie,
+            address: up.address,
+            city: up.city,
+            zip_code: up.zip_code,
+            phone: up.phone,
+            email: up.email,
+          })
+          .eq('id', up.id)
+          .eq('organization_id', user.organization_id)
+      )
+    )
+    for (const r of resList) {
+      if (!r.error) updatedCount++
+    }
+  }
+
+  revalidatePath('/remetentes')
+  revalidatePath('/novo-transporte')
+
+  return {
+    success: true,
+    totalRecords: clients.length,
+    createdCount: createdList.length,
+    updatedCount,
+    unchangedCount,
+    changedDetails,
+  }
+}
+
 // ==========================================
 // 🏢 DESTINATÁRIOS
 // ==========================================
@@ -3401,6 +3641,253 @@ export async function deleteRecipient(id: string) {
   revalidatePath('/remetentes')
   revalidatePath('/novo-transporte')
   return { success: true }
+}
+
+/**
+ * Importação em massa de Destinatários a partir do relatório de clientes SSW.
+ * Permite associar um Remetente padrão (opcional) e mapeia regras de agendamento automático.
+ */
+export async function importSswRecipientsAction(
+  clients: Array<{
+    name: string
+    cnpj: string
+    formattedCnpj?: string
+    ie?: string | null
+    address?: string | null
+    city?: string | null
+    zipCode?: string | null
+    phone?: string | null
+    email?: string | null
+    hasAppointmentRule?: boolean
+  }>,
+  senderId?: string | null,
+  companyId?: string
+): Promise<SswClientImportSummary> {
+  const user = await requireAuth()
+  const supabase = await createClient()
+
+  if (!Array.isArray(clients) || clients.length === 0) {
+    return {
+      success: false,
+      error: 'Nenhum destinatário válido enviado para importação.',
+      totalRecords: 0,
+      createdCount: 0,
+      updatedCount: 0,
+      unchangedCount: 0,
+      changedDetails: [],
+    }
+  }
+
+  // Previne IDOR em company_id
+  let targetCompanyId = (companyId || '').trim()
+  if (targetCompanyId) {
+    const { data: comp } = await supabase
+      .from('companies')
+      .select('id')
+      .eq('id', targetCompanyId)
+      .eq('organization_id', user.organization_id)
+      .single()
+    if (!comp) {
+      targetCompanyId = ''
+    }
+  }
+  if (!targetCompanyId && user.organization_id) {
+    targetCompanyId = (await getOrCreateTenantCompanyId(supabase, user.organization_id)) || ''
+  }
+
+  // Previne IDOR em sender_id
+  let targetSenderId: string | null = (senderId || '').trim() || null
+  if (targetSenderId) {
+    const { data: senderCheck } = await supabase
+      .from('senders')
+      .select('id')
+      .eq('id', targetSenderId)
+      .eq('organization_id', user.organization_id)
+      .single()
+    if (!senderCheck) {
+      targetSenderId = null
+    }
+  }
+
+  // Carrega destinatários existentes para deduplicação rápida
+  const { data: existingRecipients, error: fetchErr } = await supabase
+    .from('recipients')
+    .select('id, name, cnpj, ie, address, city, zip_code, phone, email, has_appointment_rule, sender_id')
+    .eq('organization_id', user.organization_id)
+
+  if (fetchErr) {
+    return {
+      success: false,
+      error: 'Erro ao consultar destinatários existentes: ' + fetchErr.message,
+      totalRecords: clients.length,
+      createdCount: 0,
+      updatedCount: 0,
+      unchangedCount: 0,
+      changedDetails: [],
+    }
+  }
+
+  const byCnpj = new Map<string, any>()
+  const byName = new Map<string, any>()
+
+  for (const r of existingRecipients || []) {
+    const cleanCnpj = (r.cnpj || '').replace(/\D/g, '')
+    if (cleanCnpj.length >= 11) {
+      byCnpj.set(cleanCnpj, r)
+    }
+    const normName = (r.name || '').toUpperCase().replace(/\s+/g, ' ').trim()
+    if (normName) {
+      byName.set(normName, r)
+    }
+  }
+
+  const toInsert: any[] = []
+  const toUpdate: any[] = []
+  let unchangedCount = 0
+  const changedDetails: SswClientImportDetail[] = []
+  const seenInBatch = new Set<string>()
+
+  for (const item of clients) {
+    const name = (item.name || '').trim()
+    const cleanCnpj = (item.cnpj || '').replace(/\D/g, '')
+    if (!name || name.length < 3 || cleanCnpj.length < 11) continue
+
+    if (seenInBatch.has(cleanCnpj)) continue
+    seenInBatch.add(cleanCnpj)
+
+    const normName = name.toUpperCase().replace(/\s+/g, ' ').trim()
+    const existing = byCnpj.get(cleanCnpj) || byName.get(normName)
+
+    const formattedDoc = item.formattedCnpj || cleanCnpj
+    const hasAppt = Boolean(item.hasAppointmentRule)
+
+    if (!existing) {
+      toInsert.push({
+        company_id: targetCompanyId || null,
+        sender_id: targetSenderId || null,
+        name,
+        cnpj: formattedDoc,
+        ie: item.ie || null,
+        address: item.address || null,
+        city: item.city || null,
+        zip_code: item.zipCode || null,
+        phone: item.phone || null,
+        email: item.email || null,
+        has_appointment_rule: hasAppt,
+        appointment_notes: hasAppt ? 'Agendamento obrigatório conforme cadastro SSW' : null,
+        organization_id: user.organization_id,
+      })
+      changedDetails.push({
+        name,
+        cnpj: formattedDoc,
+        city: item.city || '',
+        phone: item.phone || undefined,
+        status: 'criado',
+        note: hasAppt ? 'Com regra de agendamento' : undefined,
+      })
+    } else {
+      const existingCleanPhone = (existing.phone || '').replace(/\D/g, '')
+      const newCleanPhone = (item.phone || '').replace(/\D/g, '')
+      const phoneChanged = newCleanPhone && existingCleanPhone !== newCleanPhone
+      const addressChanged = item.address && existing.address !== item.address
+      const cityChanged = item.city && existing.city !== item.city
+      const ieChanged = item.ie && existing.ie !== item.ie
+      const emailChanged = item.email && existing.email !== item.email
+      const apptChanged = hasAppt && !existing.has_appointment_rule
+      const senderChanged = targetSenderId && !existing.sender_id
+
+      if (!phoneChanged && !addressChanged && !cityChanged && !ieChanged && !emailChanged && !apptChanged && !senderChanged) {
+        unchangedCount++
+      } else {
+        toUpdate.push({
+          id: existing.id,
+          name: existing.name || name,
+          cnpj: existing.cnpj || formattedDoc,
+          ie: item.ie || existing.ie || null,
+          address: item.address || existing.address || null,
+          city: item.city || existing.city || null,
+          zip_code: item.zipCode || existing.zip_code || null,
+          phone: item.phone || existing.phone || null,
+          email: item.email || existing.email || null,
+          has_appointment_rule: existing.has_appointment_rule || hasAppt,
+          sender_id: existing.sender_id || targetSenderId || null,
+        })
+        changedDetails.push({
+          name: existing.name || name,
+          cnpj: existing.cnpj || formattedDoc,
+          city: item.city || existing.city || '',
+          phone: item.phone || existing.phone || undefined,
+          status: 'atualizado',
+          note: apptChanged ? 'Regra de agendamento ativada' : undefined,
+        })
+      }
+    }
+  }
+
+  // Executa inserções em chunks de 100
+  const createdList: any[] = []
+  const CHUNK_SIZE = 100
+  for (let i = 0; i < toInsert.length; i += CHUNK_SIZE) {
+    const chunk = toInsert.slice(i, i + CHUNK_SIZE)
+    const { data: inserted, error: insErr } = await supabase
+      .from('recipients')
+      .insert(chunk)
+      .select('id, name, cnpj')
+    if (insErr) {
+      console.error('Erro ao inserir destinatários SSW:', insErr.message)
+      return {
+        success: false,
+        error: 'Erro ao gravar destinatários no banco: ' + insErr.message,
+        totalRecords: clients.length,
+        createdCount: createdList.length,
+        updatedCount: 0,
+        unchangedCount,
+        changedDetails,
+      }
+    }
+    if (inserted) createdList.push(...inserted)
+  }
+
+  // Executa atualizações
+  let updatedCount = 0
+  const UPDATE_BATCH = 20
+  for (let i = 0; i < toUpdate.length; i += UPDATE_BATCH) {
+    const batch = toUpdate.slice(i, i + UPDATE_BATCH)
+    const resList = await Promise.all(
+      batch.map((up) =>
+        supabase
+          .from('recipients')
+          .update({
+            ie: up.ie,
+            address: up.address,
+            city: up.city,
+            zip_code: up.zip_code,
+            phone: up.phone,
+            email: up.email,
+            has_appointment_rule: up.has_appointment_rule,
+            sender_id: up.sender_id,
+          })
+          .eq('id', up.id)
+          .eq('organization_id', user.organization_id)
+      )
+    )
+    for (const r of resList) {
+      if (!r.error) updatedCount++
+    }
+  }
+
+  revalidatePath('/destinatarios')
+  revalidatePath('/remetentes')
+  revalidatePath('/novo-transporte')
+
+  return {
+    success: true,
+    totalRecords: clients.length,
+    createdCount: createdList.length,
+    updatedCount,
+    unchangedCount,
+    changedDetails,
+  }
 }
 
 // ==========================================

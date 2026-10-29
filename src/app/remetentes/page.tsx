@@ -1,6 +1,7 @@
 import { getSenders, getCompanies } from "../actions"
 import { requireAuth } from "@/utils/supabase/auth"
 import { SenderManager } from "./SenderManager"
+import { ImportSswSendersButton } from "@/components/ImportSswSendersButton"
 
 export default async function RemetentesPage() {
   const currentUser = await requireAuth()
@@ -19,6 +20,9 @@ export default async function RemetentesPage() {
           <p className="text-sm text-[#57534E] mt-1">
             Gestão de empresas expedidoras de carga, indústrias e armazéns com dados fiscais e de contato.
           </p>
+        </div>
+        <div className="flex items-center gap-3">
+          <ImportSswSendersButton companies={companies} />
         </div>
       </div>
 
