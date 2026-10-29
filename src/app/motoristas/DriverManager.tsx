@@ -21,6 +21,8 @@ import {
   Eye,
   EyeOff,
   Search,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react"
 
 // ==========================================
@@ -597,18 +599,34 @@ export function DriverManager({
     return () => window.removeEventListener('ssw-drivers-imported', handleSswImport)
   }, [])
 
-  // Filtro memorizado de busca (Otimização de Performance)
+  // Filtro memorizado de busca (Otimização de Performance + correção de busca por texto vs dígitos)
   const filteredDrivers = useMemo(() => {
     if (!searchTerm.trim()) return drivers
     const term = searchTerm.toLowerCase().trim()
+    const digitsTerm = term.replace(/\D/g, '')
     return drivers.filter((d) => {
       const matchName = d.name?.toLowerCase().includes(term)
       const matchPlate = d.default_plate?.toLowerCase().includes(term)
-      const matchPhone = d.phone?.replace(/\D/g, '').includes(term.replace(/\D/g, ''))
-      const matchCpf = d.cpf?.replace(/\D/g, '').includes(term.replace(/\D/g, ''))
-      return matchName || matchPlate || matchPhone || matchCpf
+      const matchPhone = digitsTerm.length > 0 && d.phone?.replace(/\D/g, '').includes(digitsTerm)
+      const matchCpf = digitsTerm.length > 0 && d.cpf?.replace(/\D/g, '').includes(digitsTerm)
+      return Boolean(matchName || matchPlate || matchPhone || matchCpf)
     })
   }, [drivers, searchTerm])
+
+  // Paginação de alta performance para suportar 5.000+ motoristas sem travar o DOM
+  const [currentPage, setCurrentPage] = useState(1)
+  const DRIVERS_PER_PAGE = 48
+
+  useEffect(() => {
+    setCurrentPage(1)
+  }, [searchTerm])
+
+  const totalPages = Math.max(1, Math.ceil(filteredDrivers.length / DRIVERS_PER_PAGE))
+
+  const paginatedDrivers = useMemo(() => {
+    const start = (currentPage - 1) * DRIVERS_PER_PAGE
+    return filteredDrivers.slice(start, start + DRIVERS_PER_PAGE)
+  }, [filteredDrivers, currentPage])
 
   const handleDriverCreated = (newDriver: any) => {
     setDrivers((prev) => [newDriver, ...prev])
@@ -674,16 +692,17 @@ export function DriverManager({
         <div className="lg:col-span-2 space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <h2 className="text-sm font-semibold tracking-wider text-[#78716C] uppercase font-mono">
-              Motoristas Registrados ({filteredDrivers.length} de {drivers.length})
+              Motoristas Registrados ({filteredDrivers.length.toLocaleString('pt-BR')} de{' '}
+              {drivers.length.toLocaleString('pt-BR')})
             </h2>
 
             {/* Barra de busca rápida */}
-            <div className="relative w-full sm:w-64">
+            <div className="relative w-full sm:w-72">
               <Search className="w-4 h-4 text-[#78716C] absolute left-3 top-1/2 -translate-y-1/2" />
               <Input
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Buscar nome, placa ou fone..."
+                placeholder="Buscar nome, CPF, placa ou fone..."
                 className="pl-9 h-9 text-xs bg-white"
               />
               {searchTerm && (
@@ -711,27 +730,64 @@ export function DriverManager({
               </p>
             </div>
           ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              {filteredDrivers.map((d: any) => (
-                <DriverCard
-                  key={d.id}
-                  driver={d}
-                  companies={companies}
-                  isAdmin={isAdmin}
-                  isEditing={editingId === d.id}
-                  isDeleting={deletingId === d.id}
-                  onStartEdit={() => {
-                    setFeedbackError(null)
-                    setEditingId(d.id)
-                  }}
-                  onCancelEdit={() => setEditingId(null)}
-                  onSaveEdit={(formData) => handleUpdate(d.id, formData)}
-                  onStartDelete={() => setDeletingId(d.id)}
-                  onCancelDelete={() => setDeletingId(null)}
-                  onConfirmDelete={() => handleDelete(d.id)}
-                  isPending={isPending}
-                />
-              ))}
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {paginatedDrivers.map((d: any) => (
+                  <DriverCard
+                    key={d.id}
+                    driver={d}
+                    companies={companies}
+                    isAdmin={isAdmin}
+                    isEditing={editingId === d.id}
+                    isDeleting={deletingId === d.id}
+                    onStartEdit={() => {
+                      setFeedbackError(null)
+                      setEditingId(d.id)
+                    }}
+                    onCancelEdit={() => setEditingId(null)}
+                    onSaveEdit={(formData) => handleUpdate(d.id, formData)}
+                    onStartDelete={() => setDeletingId(d.id)}
+                    onCancelDelete={() => setDeletingId(null)}
+                    onConfirmDelete={() => handleDelete(d.id)}
+                    isPending={isPending}
+                  />
+                ))}
+              </div>
+
+              {totalPages > 1 && (
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-[#E7E5E4] text-xs font-mono text-[#57534E]">
+                  <span>
+                    Exibindo {((currentPage - 1) * DRIVERS_PER_PAGE + 1).toLocaleString('pt-BR')}&ndash;
+                    {Math.min(currentPage * DRIVERS_PER_PAGE, filteredDrivers.length).toLocaleString('pt-BR')} de{' '}
+                    {filteredDrivers.length.toLocaleString('pt-BR')} motoristas
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={currentPage <= 1}
+                      onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                      className="h-8 px-2.5 text-xs gap-1"
+                    >
+                      <ChevronLeft className="w-3.5 h-3.5" /> Anterior
+                    </Button>
+                    <span className="px-2 font-semibold text-[#1C1917]">
+                      Página {currentPage} de {totalPages}
+                    </span>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      disabled={currentPage >= totalPages}
+                      onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                      className="h-8 px-2.5 text-xs gap-1"
+                    >
+                      Próxima <ChevronRight className="w-3.5 h-3.5" />
+                    </Button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

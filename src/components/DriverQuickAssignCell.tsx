@@ -241,29 +241,39 @@ export function DriverQuickAssignCell({
     }
   }
 
-  // Filtragem de busca no dropdown
+  // Filtragem de busca no dropdown (suporta 5.000+ motoristas com busca instantânea em memória)
   const normalizedSearch = searchTerm.trim().toLowerCase()
+  const digitsSearch = normalizedSearch.replace(/\D/g, '')
+  const [visibleLimit, setVisibleLimit] = useState(80)
+
+  useEffect(() => {
+    setVisibleLimit(80)
+  }, [normalizedSearch, isOpen])
 
   const filteredVehicleHistory = useMemo(() => {
     if (!normalizedSearch) return vehicleHistory
     return vehicleHistory.filter(
       (item) =>
         item.driver.name?.toLowerCase().includes(normalizedSearch) ||
-        item.driver.phone?.replace(/\D/g, '').includes(normalizedSearch) ||
+        (digitsSearch.length > 0 && item.driver.phone?.replace(/\D/g, '').includes(digitsSearch)) ||
         item.driver.default_plate?.toLowerCase().includes(normalizedSearch)
     )
-  }, [vehicleHistory, normalizedSearch])
+  }, [vehicleHistory, normalizedSearch, digitsSearch])
 
   const filteredOtherDrivers = useMemo(() => {
     if (!normalizedSearch) return otherDrivers
     return otherDrivers.filter(
       (d) =>
         d.name?.toLowerCase().includes(normalizedSearch) ||
-        d.phone?.replace(/\D/g, '').includes(normalizedSearch) ||
+        (digitsSearch.length > 0 && d.phone?.replace(/\D/g, '').includes(digitsSearch)) ||
         d.default_plate?.toLowerCase().includes(normalizedSearch) ||
-        d.cpf?.replace(/\D/g, '').includes(normalizedSearch)
+        (digitsSearch.length > 0 && d.cpf?.replace(/\D/g, '').includes(digitsSearch))
     )
-  }, [otherDrivers, normalizedSearch])
+  }, [otherDrivers, normalizedSearch, digitsSearch])
+
+  const visibleOtherDrivers = useMemo(() => {
+    return filteredOtherDrivers.slice(0, visibleLimit)
+  }, [filteredOtherDrivers, visibleLimit])
 
   // Resolução resiliente do motorista atual (seja por join de objeto, array ou id direto)
   const currentDriver =
@@ -445,7 +455,11 @@ export function DriverQuickAssignCell({
                 />
               </div>
               <div className="flex items-center justify-between text-[10px] font-mono text-stone-500 mt-1.5 px-0.5">
-                <span>Total de {allDrivers.length} motoristas cadastrados</span>
+                <span>
+                  {normalizedSearch
+                    ? `${filteredOtherDrivers.length.toLocaleString('pt-BR')} encontrado(s) de ${allDrivers.length.toLocaleString('pt-BR')}`
+                    : `Total de ${allDrivers.length.toLocaleString('pt-BR')} motoristas cadastrados`}
+                </span>
                 {searchTerm && (
                   <button
                     type="button"
@@ -549,7 +563,7 @@ export function DriverQuickAssignCell({
                     </span>
                   </div>
                   <div className="space-y-1">
-                    {filteredOtherDrivers.map((d) => (
+                    {visibleOtherDrivers.map((d) => (
                       <button
                         key={d.id}
                         type="button"
@@ -577,6 +591,17 @@ export function DriverQuickAssignCell({
                         )}
                       </button>
                     ))}
+
+                    {filteredOtherDrivers.length > visibleLimit && (
+                      <button
+                        type="button"
+                        onClick={() => setVisibleLimit((prev) => prev + 100)}
+                        className="w-full py-2 mt-1 text-center text-[11px] font-mono font-semibold text-[#0D9488] hover:bg-teal-50/70 rounded-md border border-dashed border-teal-200 transition-colors cursor-pointer"
+                      >
+                        Mostrar mais motoristas (+100 de{' '}
+                        {(filteredOtherDrivers.length - visibleLimit).toLocaleString('pt-BR')} restantes)
+                      </button>
+                    )}
                   </div>
                 </div>
               )}

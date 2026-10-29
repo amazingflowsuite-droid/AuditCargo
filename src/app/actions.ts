@@ -768,6 +768,82 @@ export async function deleteBranch(id: string) {
 // 🚛 MOTORISTAS
 // ==========================================
 
+/**
+ * Normaliza dígitos de CPF para 11 caracteres (preservando zeros à esquerda quando entre 8 e 11 dígitos).
+ */
+function normalizeCpfDigits(rawCpf?: string | null): string {
+  const digits = String(rawCpf || '').replace(/\D/g, '')
+  if (digits.length >= 8 && digits.length <= 11) {
+    return digits.padStart(11, '0')
+  }
+  return digits
+}
+
+/**
+ * Busca todos os motoristas da organização paginando em ondas de 1.000 registros
+ * sem depender de `{ count: 'exact' }` (que pode falhar ou truncar em joins do PostgREST).
+ */
+async function fetchAllDriversForOrganization(supabase: any, targetOrgId: string) {
+  const PAGE_SIZE = 1000
+  const WAVE_PAGES = 5 // Busca até 5.000 registros por onda paralela
+  const MAX_RECORDS = 50000
+  const selectColumns =
+    'id, name, cpf, phone, default_plate, pin, company_id, telegram_chat_id, telegram_username, created_at, companies(name)'
+
+  const allDrivers: any[] = []
+  let offset = 0
+
+  while (offset < MAX_RECORDS) {
+    const ranges: Array<[number, number]> = []
+    for (let i = 0; i < WAVE_PAGES; i++) {
+      const from = offset + i * PAGE_SIZE
+      const to = from + PAGE_SIZE - 1
+      ranges.push([from, to])
+    }
+
+    const waveResults = await Promise.all(
+      ranges.map(([from, to]) =>
+        supabase
+          .from('drivers')
+          .select(selectColumns)
+          .eq('organization_id', targetOrgId)
+          .order('name', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, to)
+      )
+    )
+
+    let reachedEnd = false
+    for (const res of waveResults) {
+      if (res.error) {
+        console.error('Erro ao buscar página de motoristas:', res.error.message)
+        if (allDrivers.length === 0) {
+          return { data: [], error: res.error }
+        }
+        reachedEnd = true
+        break
+      }
+
+      const rows = res.data || []
+      if (rows.length > 0) {
+        allDrivers.push(...rows)
+      }
+      if (rows.length < PAGE_SIZE) {
+        reachedEnd = true
+        break
+      }
+    }
+
+    if (reachedEnd) {
+      break
+    }
+
+    offset += WAVE_PAGES * PAGE_SIZE
+  }
+
+  return { data: allDrivers, error: null }
+}
+
 export async function getDrivers(organizationId?: string) {
   const user = await requireAuth().catch(() => null)
   if (!user) return []
@@ -779,17 +855,28 @@ export async function getDrivers(organizationId?: string) {
   }
 
   const supabase = await createClient()
-  const { data, error } = await supabase
-    .from('drivers')
-    .select('id, name, cpf, phone, default_plate, pin, company_id, telegram_chat_id, telegram_username, created_at, companies(name)')
-    .eq('organization_id', targetOrgId)
-    .order('created_at', { ascending: false })
+  const { data } = await fetchAllDriversForOrganization(supabase, targetOrgId)
 
-  if (error) {
-    console.error('Erro ao buscar motoristas:', error.message)
-    return []
+  // Deduplica visualmente caso existam registros duplicados de testes anteriores (priorizando quem tem placa ou vínculo Telegram)
+  const seenKeys = new Map<string, any>()
+  for (const drv of data || []) {
+    const cpfKey = normalizeCpfDigits(drv.cpf)
+    const nameKey = String(drv.name || '').toUpperCase().replace(/\s+/g, ' ').trim()
+    const key = cpfKey.length === 11 ? `cpf:${cpfKey}` : `name:${nameKey}`
+
+    const existing = seenKeys.get(key)
+    if (!existing) {
+      seenKeys.set(key, drv)
+    } else {
+      const existingScore = (existing.default_plate ? 2 : 0) + (existing.telegram_chat_id ? 2 : 0)
+      const currentScore = (drv.default_plate ? 2 : 0) + (drv.telegram_chat_id ? 2 : 0)
+      if (currentScore > existingScore) {
+        seenKeys.set(key, drv)
+      }
+    }
   }
-  return data || []
+
+  return Array.from(seenKeys.values())
 }
 
 export async function createDriver(formData: FormData) {
@@ -1025,34 +1112,65 @@ export async function importSswDriversAction(
       companyId = (await getOrCreateTenantCompanyId(supabase, user.organization_id)) || ''
     }
 
-    // Carrega motoristas existentes na organização para deduplicação rápida em memória
-    const { data: existingList, error: fetchError } = await supabase
-      .from('drivers')
-      .select(
-        'id, name, cpf, phone, default_plate, pin, company_id, telegram_chat_id, telegram_username, created_at, companies(name)'
-      )
-      .eq('organization_id', user.organization_id)
+    // Carrega todos os motoristas existentes na organização (sem limite de 1.000 do PostgREST) para deduplicação rápida em memória
+    const { data: existingList, error: fetchError } = await fetchAllDriversForOrganization(
+      supabase,
+      user.organization_id
+    )
 
     if (fetchError) {
       return { success: false, error: 'Falha ao consultar base de motoristas: ' + fetchError.message }
     }
 
     const byCpf = new Map<string, any>()
-    const byNameWithoutCpf = new Map<string, any>()
+    const byNameFull = new Map<string, any>()
+    const byName30 = new Map<string, any>()
+    const duplicateIdsToDelete: string[] = []
+
+    const scoreDriverRecord = (drv: any) =>
+      (drv.default_plate ? 4 : 0) + (drv.telegram_chat_id ? 4 : 0) + (drv.cpf ? 2 : 0)
 
     for (const existing of existingList || []) {
-      const cleanExistingCpf = (existing.cpf || '').replace(/\D/g, '')
+      const cleanExistingCpf = normalizeCpfDigits(existing.cpf)
+      const normName = String(existing.name || '')
+        .toUpperCase()
+        .replace(/\s+/g, ' ')
+        .trim()
+      const normNamePrefix = normName.slice(0, 30)
+
       if (cleanExistingCpf.length === 11) {
-        byCpf.set(cleanExistingCpf, existing)
-      } else {
-        const normName = (existing.name || '')
-          .toUpperCase()
-          .replace(/\s+/g, ' ')
-          .trim()
-          .slice(0, 30)
-        if (normName) {
-          byNameWithoutCpf.set(normName, existing)
+        const prev = byCpf.get(cleanExistingCpf)
+        if (!prev) {
+          byCpf.set(cleanExistingCpf, existing)
+        } else {
+          // Se havia duplicata de testes anteriores (quando o limite de 1.000 estava ativo), mantém o registro principal e agenda a limpeza da duplicata
+          if (scoreDriverRecord(existing) > scoreDriverRecord(prev)) {
+            duplicateIdsToDelete.push(prev.id)
+            byCpf.set(cleanExistingCpf, existing)
+          } else {
+            duplicateIdsToDelete.push(existing.id)
+          }
         }
+      }
+
+      if (normName && !byNameFull.has(normName)) {
+        byNameFull.set(normName, existing)
+      }
+      if (normNamePrefix && !byName30.has(normNamePrefix)) {
+        byName30.set(normNamePrefix, existing)
+      }
+    }
+
+    // Limpa automaticamente eventuais duplicatas geradas em testes anteriores
+    if (duplicateIdsToDelete.length > 0) {
+      const DELETE_CHUNK = 200
+      for (let i = 0; i < duplicateIdsToDelete.length; i += DELETE_CHUNK) {
+        const chunkIds = duplicateIdsToDelete.slice(i, i + DELETE_CHUNK)
+        await supabase
+          .from('drivers')
+          .delete()
+          .in('id', chunkIds)
+          .eq('organization_id', user.organization_id)
       }
     }
 
@@ -1081,9 +1199,10 @@ export async function importSswDriversAction(
 
     let unchangedCount = 0
     const changedDetails: SswDriverImportDetail[] = []
+    const seenInBatch = new Set<string>()
 
     for (const drv of parsed.validMobileDrivers) {
-      const cleanCpf = (drv.cpf || '').replace(/\D/g, '')
+      const cleanCpf = normalizeCpfDigits(drv.cpf)
       const cleanPhone = (drv.cleanPhone || drv.phone || '').replace(/\D/g, '')
       const pin = (drv.pin || cleanCpf.slice(-4)).replace(/\D/g, '')
       const name = (drv.name || '').trim()
@@ -1092,8 +1211,17 @@ export async function importSswDriversAction(
         continue
       }
 
-      const normName30 = name.toUpperCase().replace(/\s+/g, ' ').trim().slice(0, 30)
-      const existing = byCpf.get(cleanCpf) || byNameWithoutCpf.get(normName30)
+      if (seenInBatch.has(cleanCpf)) {
+        continue
+      }
+      seenInBatch.add(cleanCpf)
+
+      const normName = name.toUpperCase().replace(/\s+/g, ' ').trim()
+      const normName30 = normName.slice(0, 30)
+      const existing =
+        byCpf.get(cleanCpf) ||
+        byNameFull.get(normName) ||
+        byName30.get(normName30)
 
       if (!existing) {
         toInsert.push({
@@ -1113,7 +1241,7 @@ export async function importSswDriversAction(
         })
       } else {
         const existingCleanPhone = (existing.phone || '').replace(/\D/g, '')
-        const existingCleanCpf = (existing.cpf || '').replace(/\D/g, '')
+        const existingCleanCpf = normalizeCpfDigits(existing.cpf)
 
         const phoneChanged = existingCleanPhone !== cleanPhone
         const cpfWasMissing = existingCleanCpf !== cleanCpf
