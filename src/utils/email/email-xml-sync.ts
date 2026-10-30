@@ -381,15 +381,29 @@ export async function syncCteEmailsFromMailbox(targetOrgId?: string): Promise<Em
                 const filenameLower = (att.filename || '').toLowerCase()
                 const isXmlName = filenameLower.endsWith('.xml')
                 const isXmlType = att.contentType?.includes('xml')
-                const isTxtName = filenameLower.endsWith('.txt') || filenameLower.endsWith('.edi')
+                const isTxtName =
+                  filenameLower.endsWith('.txt') ||
+                  filenameLower.endsWith('.edi') ||
+                  filenameLower.endsWith('.con') ||
+                  filenameLower.endsWith('.rem') ||
+                  filenameLower.endsWith('.dat')
                 const contentStr = att.content ? att.content.toString('utf-8') : ''
                 const trimmedContent = contentStr.trimStart()
                 const hasXmlSignature = contentStr.includes('<cteProc') || contentStr.includes('<CTe')
                 const hasEdiSignature =
                   trimmedContent.startsWith('000') &&
-                  (trimmedContent.includes('CON50') || trimmedContent.includes('520') || trimmedContent.includes('522'))
+                  (
+                    trimmedContent.includes('CON50') ||
+                    trimmedContent.includes('520') ||
+                    trimmedContent.includes('522') ||
+                    trimmedContent.includes('CON31') ||
+                    trimmedContent.includes('320') ||
+                    trimmedContent.includes('321') ||
+                    trimmedContent.includes('322') ||
+                    trimmedContent.includes('CON')
+                  )
 
-                // 1. Processamento de EDI PROCEDA CONEMB (Manifesto / Romaneio SSW)
+                // 1. Processamento de EDI PROCEDA CONEMB (Manifesto / Romaneio SSW - Versões 5.0 e 3.1)
                 if (isTxtName || hasEdiSignature) {
                   const parsedEdi = parseProcedaConemb(trimmedContent)
                   if (parsedEdi.isConemb && parsedEdi.totalCtes > 0) {
@@ -401,8 +415,9 @@ export async function syncCteEmailsFromMailbox(targetOrgId?: string): Promise<Em
 
                     for (const d of ediRes.details) {
                       if (d.status === 'erro') hasDatabaseError = true
+                      const plateOrLote = d.plate && d.plate !== 'SEM_PLACA' ? `Placa ${d.plate}` : `Lote ${parsedEdi.intercambioId || 'EDI'}`
                       result.details.push({
-                        subject: `${subject} • EDI Placa ${d.plate}`,
+                        subject: `${subject} • EDI ${plateOrLote}`,
                         from: fromAddr,
                         date: emailDate,
                         cteNumber: d.cteNumber,

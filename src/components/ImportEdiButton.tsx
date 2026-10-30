@@ -33,7 +33,7 @@ interface EdiImportResultData {
 }
 
 /**
- * Card de Importação Direta de Manifesto / Romaneio EDI (PROCEDA CONEMB 5.0 - SSW)
+ * Card de Importação Direta de Manifesto / Romaneio EDI (PROCEDA CONEMB 5.0 e 3.1 - SSW)
  * Cria os Romaneios diretamente no banco de dados com vínculo automático de placa e motorista.
  */
 export function EdiManifestImportCard() {
@@ -90,7 +90,7 @@ export function EdiManifestImportCard() {
       <input
         ref={fileInputRef}
         type="file"
-        accept=".txt,.edi"
+        accept=".txt,.edi,.con,.rem,.dat"
         onChange={handleFileChange}
         className="hidden"
       />
@@ -128,7 +128,7 @@ export function EdiManifestImportCard() {
                     <span>Importar Manifesto / Romaneio via Arquivo EDI (SSW)</span>
                   </h4>
                   <p className="text-xs text-stone-600 mt-0.5">
-                    Arraste o arquivo <strong>.txt</strong> ou <strong>.edi</strong> (PROCEDA CONEMB 5.0) aqui ou{' '}
+                    Arraste o arquivo <strong>.txt</strong>, <strong>.edi</strong> ou <strong>.con</strong> (PROCEDA CONEMB 5.0 ou 3.1) aqui ou{' '}
                     <span className="text-[#0D9488] font-semibold underline">clique para selecionar</span>
                   </p>
                 </div>

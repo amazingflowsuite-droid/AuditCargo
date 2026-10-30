@@ -61,8 +61,11 @@ export interface ParsedEdiManifest {
 
 export interface ParsedEdiConemb {
   isConemb: boolean
+  version?: '3.1' | '5.0'
   transportadora?: string
   cnpjTransportadora?: string
+  destinatario?: string
+  intercambioId?: string
   totalCtes: number
   ctes: ParsedEdiCte[]
 }
@@ -80,21 +83,27 @@ export function formatPlate(raw: string): string {
 }
 
 /**
- * Parser para layout EDI PROCEDA CONEMB 5.0 (Conhecimentos Embarcados no Manifesto/Romaneio)
+ * Parser polimórfico para layout EDI PROCEDA CONEMB:
+ * - CONEMB 5.0 (registros 000, 520, 521, 522, 523, 524, 527, 529)
+ * - CONEMB 3.1 (registros 000, 320, 321, 322, 323, 329) - Ex: Santa Helena / ERPs tradicionais
  */
 export function parseProcedaConemb(ediText: string): ParsedEdiConemb {
   const lines = ediText.split(/\r?\n/).filter((l) => l.trim().length > 0)
 
-  // Verifica assinatura de header PROCEDA (000) e lote de conhecimentos (520)
+  // Verifica assinatura de header PROCEDA (000) e lote de conhecimentos (520/522 no CONEMB 5.0 ou 320/322 no CONEMB 3.1)
   const has000 = lines.some((l) => l.startsWith('000'))
-  const has520 = lines.some((l) => l.startsWith('520'))
+  const has520 = lines.some((l) => l.startsWith('520') || l.startsWith('522'))
+  const has320 = lines.some((l) => l.startsWith('320') || l.startsWith('322'))
 
-  if (!has000 && !has520) {
+  if (!has000 && !has520 && !has320) {
     return { isConemb: false, totalCtes: 0, ctes: [] }
   }
 
+  const version: '3.1' | '5.0' = has320 ? '3.1' : '5.0'
   let transportadora = ''
   let cnpjTransportadora = ''
+  let destinatario = ''
+  let intercambioId = ''
   const ctes: ParsedEdiCte[] = []
   let currentCte: ParsedEdiCte | null = null
 
@@ -103,6 +112,109 @@ export function parseProcedaConemb(ediText: string): ParsedEdiConemb {
 
     if (regType === '000') {
       transportadora = line.slice(3, 38).trim()
+      destinatario = line.slice(38, 73).trim()
+      const rawInter = line.slice(83, 95).trim()
+      if (rawInter) intercambioId = rawInter
+    } else if (regType === '321') {
+      // Registro 321 (CONEMB 3.1): Dados da Transportadora
+      cnpjTransportadora = line.slice(3, 17).trim()
+      if (!transportadora) {
+        transportadora = line.slice(17, 57).trim()
+      }
+    } else if (regType === '322') {
+      // Registro 322 (CONEMB 3.1): Conhecimento Embarcado completo em linha única
+      const filial = line.slice(3, 13).trim()
+      const serie = line.slice(13, 18).trim()
+      const nCTRaw = line.slice(18, 30).trim()
+      const nCT = String(parseInt(nCTRaw, 10) || nCTRaw)
+
+      const rawDate = line.slice(30, 38).trim() // DDMMAAAA
+      let issueDate: string | undefined
+      if (rawDate.length === 8) {
+        const dia = rawDate.slice(0, 2)
+        const mes = rawDate.slice(2, 4)
+        const ano = rawDate.slice(4, 8)
+        issueDate = `${ano}-${mes}-${dia}`
+      }
+
+      const condFreteRaw = line.slice(38, 39).trim()
+      const condicaoFrete: 'CIF' | 'FOB' = condFreteRaw === 'F' ? 'FOB' : 'CIF'
+
+      const pesoRaw = line.slice(39, 46).trim()
+      const weightKg = pesoRaw && !isNaN(Number(pesoRaw)) ? parseFloat(pesoRaw) / 100 : undefined
+
+      const freteRaw = line.slice(46, 61).trim()
+      const vFrete = freteRaw && !isNaN(Number(freteRaw)) ? parseFloat(freteRaw) / 100 : undefined
+
+      // Extração resiliente de CNPJ do Emissor e CNPJ do Embarcador / Remetente
+      const subChunk = line.slice(190, 240)
+      const cnpjsMatch = subChunk.match(/(\d{14})(\d{14})/)
+      let emitCnpj = ''
+      let remCnpj = ''
+      let nfStartIndex = 232
+
+      if (cnpjsMatch) {
+        emitCnpj = cnpjsMatch[1]
+        remCnpj = cnpjsMatch[2]
+        const chunkPos = line.indexOf(cnpjsMatch[0])
+        if (chunkPos !== -1) {
+          nfStartIndex = chunkPos + 28
+        }
+      } else {
+        emitCnpj = line.slice(204, 218).trim()
+        remCnpj = line.slice(218, 232).trim()
+      }
+
+      // Notas Fiscais: até 40 ocorrências de (Série 3 pos + Número 8 pos = 11 pos)
+      const nfsChunk = line.slice(nfStartIndex, 672)
+      const invoices: string[] = []
+      for (let i = 0; i < nfsChunk.length - 7; i += 11) {
+        const nfBlock = nfsChunk.slice(i, i + 11)
+        const nfNumRaw = nfBlock.slice(3, 11).trim()
+        if (nfBlock.length >= 11 && nfNumRaw && !/^0+$/.test(nfNumRaw)) {
+          const cleanNum = String(parseInt(nfNumRaw, 10))
+          if (cleanNum && cleanNum !== '0' && !invoices.includes(cleanNum)) {
+            invoices.push(cleanNum)
+          }
+        }
+      }
+
+      // Chave do CT-e (44 dígitos: pos 680 a 724 ou busca na linha)
+      let chCTe = ''
+      if (line.length >= 724) {
+        const candidateKey = line.slice(680, 724).trim()
+        if (/^\d{44}$/.test(candidateKey)) {
+          chCTe = candidateKey
+        }
+      }
+      if (!chCTe) {
+        const match = line.match(/\b(\d{44})\b/)
+        if (match) chCTe = match[1]
+      }
+
+      // Placa (se houver na linha)
+      let placa = ''
+      const directPlateMatch = line.match(/\b([A-Z]{3}\d{4}|[A-Z]{3}\d[A-Z]\d{2})\b/)
+      if (directPlateMatch) {
+        placa = directPlateMatch[1]
+      }
+
+      ctes.push({
+        nCT,
+        serie,
+        filial,
+        chCTe,
+        placa,
+        formattedPlate: formatPlate(placa),
+        issueDate,
+        condicaoFrete,
+        weightKg,
+        pesoCalculoKg: weightKg,
+        vFrete,
+        invoices,
+        remNome: destinatario || undefined,
+        remCnpj: remCnpj && remCnpj !== '00000000000000' ? remCnpj : undefined,
+      })
     } else if (regType === '521') {
       cnpjTransportadora = line.slice(3, 17).trim()
       if (!transportadora) {
@@ -288,8 +400,11 @@ export function parseProcedaConemb(ediText: string): ParsedEdiConemb {
 
   return {
     isConemb: true,
+    version,
     transportadora,
     cnpjTransportadora,
+    destinatario,
+    intercambioId,
     totalCtes: ctes.length,
     ctes,
   }
@@ -465,17 +580,26 @@ export async function processEdiLoteInDatabase(
 
     const rawPlate = cte.placa || 'SEM_PLACA'
     const filial = cte.filial || 'GRU'
-    const key = `ROM-${filial}-${rawPlate}`
+    // Se não tiver placa informada (padrão no CONEMB 3.1 da Santa Helena), agrupa pelo Lote/Intercâmbio + Filial (Opção A)
+    const isLoteSemPlaca = rawPlate === 'SEM_PLACA'
+    const loteKey = parsedEdi.intercambioId || 'LOTE'
+    const key = isLoteSemPlaca
+      ? `ROM-${filial}-${loteKey}`
+      : `ROM-${filial}-${rawPlate}`
+
+    const manifestNumber = isLoteSemPlaca
+      ? `Lote ${parsedEdi.destinatario || 'Santa Helena'} • ${parsedEdi.intercambioId || filial}`
+      : `Romaneio ${filial} • ${formatPlate(rawPlate)}`
 
     if (!manifestsMap.has(key)) {
       manifestsMap.set(key, {
         manifestKey: key,
-        manifestNumber: `Romaneio ${filial} • ${formatPlate(rawPlate)}`,
+        manifestNumber,
         filial,
         plate: rawPlate,
         formattedPlate: formatPlate(rawPlate),
         issueDate: cte.issueDate,
-        remNome: cte.remNome,
+        remNome: cte.remNome || parsedEdi.destinatario || undefined,
         remCnpj: cte.remCnpj,
         remEndereco: cte.remEndereco,
         remCidade: cte.remCidade,
@@ -561,10 +685,14 @@ export async function processEdiLoteInDatabase(
         total_cubagem_m3: manifest.totalCubagemM3 > 0 ? manifest.totalCubagemM3 : null,
         total_volumes: manifest.totalVolumes > 0 ? manifest.totalVolumes : null,
         cargo_value: null,
-        cargo_type: `Romaneio de Carga (${manifest.ctes.length} CT-es)`,
+        cargo_type: manifest.plate && manifest.plate !== 'SEM_PLACA'
+          ? `Romaneio de Carga (${manifest.ctes.length} CT-es)`
+          : `Lote de Carga (${manifest.ctes.length} CT-es)`,
         freight_value: manifest.totalFreightValue > 0 ? manifest.totalFreightValue : null,
         rntrc: null,
-        observations: `Romaneio SSW ${manifest.formattedPlate} • ${manifest.ctes.length} CT-es • ${manifest.invoices.length} NFs • ${manifest.totalCubagemM3.toFixed(2)} m³`,
+        observations: manifest.plate && manifest.plate !== 'SEM_PLACA'
+          ? `Romaneio SSW ${manifest.formattedPlate} • ${manifest.ctes.length} CT-es • ${manifest.invoices.length} NFs • ${manifest.totalCubagemM3.toFixed(2)} m³`
+          : `Lote EDI ${parsedEdi.destinatario || 'Santa Helena'} (${parsedEdi.intercambioId || 'SSW'}) • ${manifest.ctes.length} CT-es • ${manifest.invoices.length} NFs • Total Frete: R$ ${manifest.totalFreightValue.toFixed(2)}`,
         emitter_cnpj: parsedEdi.cnpjTransportadora || null,
         emitter_name: parsedEdi.transportadora || null,
         sender_name: manifest.remNome || null,
@@ -621,11 +749,13 @@ export async function processEdiLoteInDatabase(
         }
         mergedMeta = appendTripAuditEvent(mergedMeta, {
           type: 'TRIP_UPDATED',
-          title: 'Romaneio SSW Sincronizado / Atualizado via EDI',
+          title: manifest.plate && manifest.plate !== 'SEM_PLACA'
+            ? 'Romaneio SSW Sincronizado / Atualizado via EDI'
+            : 'Lote EDI SSW Sincronizado / Atualizado',
           description: `Dados fiscais atualizados (${manifest.ctes.length} CT-es, ${manifest.invoices.length} NFs).`,
           channel: 'edi_ssw',
           actorName: 'Robô EDI SSW',
-          metadata: { plate: manifest.formattedPlate || manifest.plate },
+          metadata: { plate: manifest.formattedPlate || manifest.plate, extra: parsedEdi.intercambioId },
         })
 
         await dbClient.query(
@@ -697,11 +827,13 @@ export async function processEdiLoteInDatabase(
 
       let initialMeta = appendTripAuditEvent(sefazMetadata, {
         type: 'CREATED',
-        title: 'Romaneio Importado via EDI SSW (CONEMB)',
+        title: manifest.plate && manifest.plate !== 'SEM_PLACA'
+          ? 'Romaneio Importado via EDI SSW (CONEMB)'
+          : 'Lote EDI Importado via SSW (CONEMB 3.1)',
         description: `${manifest.manifestNumber} importado com ${manifest.ctes.length} CT-e(s) e ${manifest.invoices.length} NF(s) para ${destCitySummary}.`,
         channel: 'edi_ssw',
         actorName: 'Importação EDI SSW',
-        metadata: { plate: manifest.formattedPlate || manifest.plate },
+        metadata: { plate: manifest.formattedPlate || manifest.plate, extra: parsedEdi.intercambioId },
       })
 
       if (matchedDriverId && matchedDriverName) {
